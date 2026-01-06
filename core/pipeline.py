@@ -157,6 +157,42 @@ def run_pipeline(
     return pairs
 
 
+def iter_pipeline(
+    text: str,
+    generate: Callable[[str], str],
+    opt: PipelineOptions | None = None,
+):
+    if opt is None:
+        opt = PipelineOptions()
+
+    segments = make_segments(text, opt)
+
+    for seg in segments:
+        if opt.skip_empty_segments and not seg.text.strip():
+            continue
+
+        p_opt = PromptOptions(
+            source_lang=opt.prompt_opt.source_lang,
+            target_lang=opt.prompt_opt.target_lang,
+            preset=opt.prompt_opt.preset,
+            terminology=opt.prompt_opt.terminology,
+            context=seg.context,
+            src_text_with_format=opt.prompt_opt.src_text_with_format,
+        )
+
+        prompt = build_prompt(seg.text, p_opt)
+        raw = generate(prompt)
+        target = extract_translation(raw, opt.post_opt)
+
+        yield AlignedPair(
+            source=seg.text,
+            target=target,
+            context=seg.context if opt.keep_debug else "",
+            prompt=prompt if opt.keep_debug else "",
+            raw=raw if opt.keep_debug else "",
+        )
+
+
 def join_translations(pairs: List[AlignedPair], join_with: str = "\n") -> str:
     return join_with.join(p.target for p in pairs)
 

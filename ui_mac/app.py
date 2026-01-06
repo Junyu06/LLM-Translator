@@ -1,6 +1,7 @@
 import os
 import sys
 import threading
+from typing import Optional
 import tkinter as tk
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
@@ -12,7 +13,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from backend import OllamaBackend, OllamaBackendOptions, OllamaMode
-from core import PipelineOptions, SplitMode, run_pipeline, render_output, OutputMode
+from core import PipelineOptions, SplitMode, iter_pipeline, render_output, OutputMode
 from core.prompt import PromptOptions
 from ui_mac.hotkey_mac import DoubleCmdCListener
 
@@ -176,21 +177,28 @@ class TranslatorApp:
                 )
                 backend = OllamaBackend(backend_opt)
 
-                pairs = run_pipeline(text, generate=backend.generate, opt=opt)
                 output_mode = OutputMode(self.output_mode_var.get())
-                output = render_output(pairs, mode=output_mode)
-                self.root.after(0, lambda: self._set_output(output))
+                pairs = []
+                for pair in iter_pipeline(text, generate=backend.generate, opt=opt):
+                    pairs.append(pair)
+                    output = render_output(pairs, mode=output_mode)
+                    self.root.after(
+                        0,
+                        lambda output=output: self._set_output(output, status="Translating..."),
+                    )
+                self.root.after(0, lambda: self.status_var.set("Done."))
             except Exception as exc:
-                self.root.after(0, lambda exc=exc: self._set_output(f"Error: {exc}"))
+                self.root.after(0, lambda exc=exc: self._set_output(f"Error: {exc}", status="Error"))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _set_output(self, text: str):
+    def _set_output(self, text: str, status: Optional[str] = "Done."):
         self.output_text.configure(state="normal")
         self.output_text.delete("1.0", "end")
         self.output_text.insert("1.0", text)
         self.output_text.configure(state="disabled")
-        self.status_var.set("Done.")
+        if status is not None:
+            self.status_var.set(status)
 
     def run(self):
         self.root.mainloop()
