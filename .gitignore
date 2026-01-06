@@ -1,1 +1,7 @@
 /venv
+.DS_Store
+/build
+/dist
+/backend/__pycache__
+/core/__pycache__
+/ui_mac/__pycache__
