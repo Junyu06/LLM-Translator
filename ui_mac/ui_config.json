@@ -1,0 +1,11 @@
+{
+  "source_lang": "en",
+  "target_lang": "zh",
+  "output_mode": "interleaved",
+  "layout": "horizontal",
+  "use_context": false,
+  "mode": "local",
+  "host": "http://192.168.50.118:11434",
+  "model": "demonbyron/HY-MT1.5-1.8B",
+  "font_size": 12
+}
