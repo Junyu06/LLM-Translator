@@ -11,6 +11,7 @@ try:
         NSPasteboardTypeFileURL,
         NSPasteboardTypePNG,
         NSPasteboardTypeTIFF,
+        NSImage,
     )
 except Exception:  # noqa: BLE001 - optional dependency
     NSPasteboard = None
@@ -18,6 +19,29 @@ except Exception:  # noqa: BLE001 - optional dependency
     NSPasteboardTypeFileURL = None
     NSPasteboardTypePNG = None
     NSPasteboardTypeTIFF = None
+    NSImage = None
+
+try:
+    from Foundation import NSURL, NSData
+    from Quartz import (
+        CGImageSourceCreateWithData,
+        CGImageSourceCreateWithURL,
+        CGImageSourceCreateImageAtIndex,
+    )
+    from Vision import (
+        VNRecognizeTextRequest,
+        VNImageRequestHandler,
+        VNRequestTextRecognitionLevelAccurate,
+    )
+except Exception:  # noqa: BLE001 - optional dependency
+    NSURL = None
+    NSData = None
+    CGImageSourceCreateWithData = None
+    CGImageSourceCreateWithURL = None
+    CGImageSourceCreateImageAtIndex = None
+    VNRecognizeTextRequest = None
+    VNImageRequestHandler = None
+    VNRequestTextRecognitionLevelAccurate = None
 
 
 def get_paste_image_paths(root=None) -> List[str]:
@@ -56,34 +80,26 @@ def get_paste_image_paths(root=None) -> List[str]:
 
 
 def run_ocr(paths: Iterable[str]) -> str:
-    try:
-        from PIL import Image  # type: ignore
-        import pytesseract  # type: ignore
-    except Exception as exc:
-        raise RuntimeError("OCR needs Pillow + pytesseract (and tesseract).") from exc
-
+    if not _vision_available():
+        return _run_ocr_tesseract(paths)
     texts = []
     for path in paths:
-        try:
-            img = Image.open(path)
-            texts.append(pytesseract.image_to_string(img))
-        except Exception:
+        cg_image = _cgimage_from_path(path)
+        if cg_image is None:
             continue
+        texts.append(_recognize_text(cg_image))
     return "\n".join(t.strip() for t in texts if t.strip())
 
 
-def run_ocr_images(images: Iterable["Image.Image"]) -> str:
-    try:
-        import pytesseract  # type: ignore
-    except Exception as exc:
-        raise RuntimeError("OCR needs pytesseract (and tesseract).") from exc
-
+def run_ocr_images(images: Iterable[bytes]) -> str:
+    if not _vision_available():
+        return _run_ocr_tesseract_images(images)
     texts = []
-    for img in images:
-        try:
-            texts.append(pytesseract.image_to_string(img))
-        except Exception:
+    for data in images:
+        cg_image = _cgimage_from_data(data)
+        if cg_image is None:
             continue
+        texts.append(_recognize_text(cg_image))
     return "\n".join(t.strip() for t in texts if t.strip())
 
 
@@ -119,31 +135,135 @@ def run_ocr_async_images(
     threading.Thread(target=worker, daemon=True).start()
 
 
-def get_paste_images() -> List["Image.Image"]:
+def get_paste_images(debug: bool = False) -> List[bytes]:
     if NSPasteboard is None:
-        return []
-
-    try:
-        from PIL import Image  # type: ignore
-    except Exception:
+        if debug:
+            print("OCR: NSPasteboard unavailable")
         return []
 
     pb = NSPasteboard.generalPasteboard()
+    types = list(pb.types() or [])
+    if debug:
+        print(f"OCR: pasteboard types = {types}")
+    candidates = []
     for ptype in (NSPasteboardTypePNG, NSPasteboardTypeTIFF):
-        if ptype is None:
+        if ptype is not None:
+            candidates.append(ptype)
+    for ptype in ("public.png", "public.tiff", "public.jpeg"):
+        candidates.append(ptype)
+
+    for ptype in candidates:
+        if ptype not in types:
             continue
         data = pb.dataForType_(ptype)
         if data is None:
             continue
         try:
             raw = bytes(data)
-            img = Image.open(BytesIO(raw))
-            return [img]
+            return [raw]
         except Exception:
             continue
+
+    try:
+        image = pb.readObjectsForClasses_options_([NSImage], None)
+        if image:
+            tiff = image[0].TIFFRepresentation()
+            if tiff is not None:
+                raw = bytes(tiff)
+                return [raw]
+    except Exception:
+        pass
     return []
 
 
 def _is_image_file(path: str) -> bool:
     ext = os.path.splitext(path)[1].lower()
     return ext in {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff", ".tif", ".webp"}
+
+
+def _ensure_vision():
+    if VNRecognizeTextRequest is None or VNImageRequestHandler is None:
+        raise RuntimeError("Vision OCR is not available on this macOS/Python.")
+
+
+def _cgimage_from_path(path: str):
+    if NSURL is None or CGImageSourceCreateWithURL is None:
+        return None
+    url = NSURL.fileURLWithPath_(path)
+    source = CGImageSourceCreateWithURL(url, None)
+    if source is None:
+        return None
+    return CGImageSourceCreateImageAtIndex(source, 0, None)
+
+
+def _cgimage_from_data(data: bytes):
+    if NSData is None or CGImageSourceCreateWithData is None:
+        return None
+    ns_data = NSData.dataWithBytes_length_(data, len(data))
+    source = CGImageSourceCreateWithData(ns_data, None)
+    if source is None:
+        return None
+    return CGImageSourceCreateImageAtIndex(source, 0, None)
+
+
+def _recognize_text(cg_image) -> str:
+    request = VNRecognizeTextRequest.alloc().init()
+    request.setRecognitionLevel_(VNRequestTextRecognitionLevelAccurate)
+    # Allow multilingual OCR; adjust if you want to force a specific language.
+    try:
+        request.setRecognitionLanguages_(
+            ["zh-Hans", "zh-Hant", "ja-JP", "ko-KR", "en-US"]
+        )
+        request.setUsesLanguageCorrection_(True)
+    except Exception:
+        pass
+    handler = VNImageRequestHandler.alloc().initWithCGImage_options_(cg_image, None)
+    ok, err = handler.performRequests_error_([request], None)
+    if not ok:
+        raise RuntimeError(f"Vision OCR failed: {err}")
+
+    results = request.results() or []
+    lines = []
+    for obs in results:
+        candidates = obs.topCandidates_(1)
+        if candidates and len(candidates) > 0:
+            lines.append(candidates[0].string())
+    return "\n".join(lines)
+
+
+def _vision_available() -> bool:
+    return VNRecognizeTextRequest is not None and VNImageRequestHandler is not None
+
+
+def _run_ocr_tesseract(paths: Iterable[str]) -> str:
+    try:
+        from PIL import Image  # type: ignore
+        import pytesseract  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("OCR needs Vision or Pillow+pytesseract+tesseract.") from exc
+
+    texts = []
+    for path in paths:
+        try:
+            img = Image.open(path)
+            texts.append(pytesseract.image_to_string(img))
+        except Exception:
+            continue
+    return "\n".join(t.strip() for t in texts if t.strip())
+
+
+def _run_ocr_tesseract_images(images: Iterable[bytes]) -> str:
+    try:
+        from PIL import Image  # type: ignore
+        import pytesseract  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("OCR needs Vision or Pillow+pytesseract+tesseract.") from exc
+
+    texts = []
+    for data in images:
+        try:
+            img = Image.open(BytesIO(data))
+            texts.append(pytesseract.image_to_string(img))
+        except Exception:
+            continue
+    return "\n".join(t.strip() for t in texts if t.strip())

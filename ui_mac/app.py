@@ -223,7 +223,7 @@ class TranslatorApp:
         paths = get_paste_image_paths(self.root)
         if not paths:
             print("OCR: no image paths found, trying image data")
-            images = get_paste_images()
+            images = get_paste_images(debug=True)
             if not images:
                 print("OCR: no image data found")
                 return None
