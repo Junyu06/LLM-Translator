@@ -13,8 +13,17 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from backend import OllamaBackend, OllamaBackendOptions, OllamaMode
-from core import PipelineOptions, SplitMode, iter_pipeline, render_output, OutputMode
-from core.prompt import PromptOptions
+from core import (
+    PipelineOptions,
+    SplitMode,
+    render_output,
+    OutputMode,
+    AlignedPair,
+    split_plain,
+    split_with_limited_context,
+)
+from core.prompt import PromptOptions, build_prompt
+from core.postprocess import extract_translation
 from ui_mac.hotkey_mac import DoubleCmdCListener
 
 try:
@@ -38,6 +47,10 @@ class TranslatorApp:
         self.host_var = tk.StringVar(value="http://127.0.0.1:11434")
         self.model_var = tk.StringVar(value=OllamaBackendOptions().model)
 
+        self._job_lock = threading.Lock()
+        self._current_job_id = 0
+        self._cancel_event: Optional[threading.Event] = None
+
         self._build_ui()
         self._setup_hotkey()
 
@@ -48,7 +61,10 @@ class TranslatorApp:
         header = ttk.Frame(main)
         header.pack(fill="x")
         ttk.Label(header, text="Input").pack(side="left")
-        ttk.Button(header, text="Translate", command=self.translate_input).pack(side="right")
+        self.translate_button = ttk.Button(header, text="Translate", command=self.translate_input)
+        self.translate_button.pack(side="right")
+        self.stop_button = ttk.Button(header, text="Stop", command=self.cancel_translation, state="disabled")
+        self.stop_button.pack(side="right", padx=(0, 8))
         ttk.Button(header, text="Quit", command=self.root.destroy).pack(side="right", padx=(0, 8))
 
         options = ttk.Frame(main)
@@ -159,9 +175,13 @@ class TranslatorApp:
             self.status_var.set("Nothing to translate.")
             return
 
+        self.cancel_translation()
         self.status_var.set("Translating...")
+        self.translate_button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
 
         def worker():
+            job_id, cancel_event = self._start_job()
             try:
                 split_mode = SplitMode.CONTEXT if self.use_context_var.get() else SplitMode.PLAIN
                 prompt_opt = PromptOptions(
@@ -179,18 +199,82 @@ class TranslatorApp:
 
                 output_mode = OutputMode(self.output_mode_var.get())
                 pairs = []
-                for pair in iter_pipeline(text, generate=backend.generate, opt=opt):
-                    pairs.append(pair)
+                if split_mode == SplitMode.CONTEXT:
+                    segments = split_with_limited_context(
+                        text, split_opt=opt.split_opt, ctx_opt=opt.ctx_opt
+                    )
+                else:
+                    segments = split_plain(text, opt=opt.split_opt)
+
+                for seg in segments:
+                    if opt.skip_empty_segments and not seg.text.strip():
+                        continue
+                    if cancel_event.is_set():
+                        break
+
+                    seg_opt = PromptOptions(
+                        source_lang=opt.prompt_opt.source_lang,
+                        target_lang=opt.prompt_opt.target_lang,
+                        preset=opt.prompt_opt.preset,
+                        terminology=opt.prompt_opt.terminology,
+                        context=seg.context,
+                        src_text_with_format=opt.prompt_opt.src_text_with_format,
+                    )
+                    prompt = build_prompt(seg.text, seg_opt)
+
+                    raw = ""
+                    for chunk in backend.stream_generate(prompt):
+                        if cancel_event.is_set():
+                            break
+                        raw += chunk
+                        temp_pairs = pairs + [AlignedPair(source=seg.text, target=raw)]
+                        output = render_output(temp_pairs, mode=output_mode)
+                        self.root.after(
+                            0,
+                            lambda output=output, job_id=job_id: self._set_output_if_current(
+                                job_id, output, status="Translating..."
+                            ),
+                        )
+                    if cancel_event.is_set():
+                        break
+
+                    target = extract_translation(raw, opt.post_opt)
+                    pairs.append(AlignedPair(source=seg.text, target=target))
                     output = render_output(pairs, mode=output_mode)
                     self.root.after(
                         0,
-                        lambda output=output: self._set_output(output, status="Translating..."),
+                        lambda output=output, job_id=job_id: self._set_output_if_current(
+                            job_id, output, status="Translating..."
+                        ),
                     )
-                self.root.after(0, lambda: self.status_var.set("Done."))
+                if cancel_event.is_set():
+                    self.root.after(0, lambda job_id=job_id: self._finish_job(job_id, "Canceled."))
+                else:
+                    self.root.after(0, lambda job_id=job_id: self._finish_job(job_id, "Done."))
             except Exception as exc:
-                self.root.after(0, lambda exc=exc: self._set_output(f"Error: {exc}", status="Error"))
+                self.root.after(
+                    0,
+                    lambda exc=exc, job_id=job_id: self._set_output_if_current(
+                        job_id, f"Error: {exc}", status="Error"
+                    ),
+                )
+                self.root.after(0, lambda job_id=job_id: self._finish_job(job_id, "Error"))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _start_job(self):
+        with self._job_lock:
+            self._current_job_id += 1
+            self._cancel_event = threading.Event()
+            return self._current_job_id, self._cancel_event
+
+    def _finish_job(self, job_id: int, status: str):
+        with self._job_lock:
+            if job_id != self._current_job_id:
+                return
+            self.status_var.set(status)
+            self.translate_button.configure(state="normal")
+            self.stop_button.configure(state="disabled")
 
     def _set_output(self, text: str, status: Optional[str] = "Done."):
         self.output_text.configure(state="normal")
@@ -199,6 +283,17 @@ class TranslatorApp:
         self.output_text.configure(state="disabled")
         if status is not None:
             self.status_var.set(status)
+
+    def _set_output_if_current(self, job_id: int, text: str, status: Optional[str] = "Done."):
+        with self._job_lock:
+            if job_id != self._current_job_id:
+                return
+        self._set_output(text, status=status)
+
+    def cancel_translation(self):
+        with self._job_lock:
+            if self._cancel_event is not None:
+                self._cancel_event.set()
 
     def run(self):
         self.root.mainloop()
