@@ -16,7 +16,7 @@ class OllamaMode(str, Enum):
 @dataclass
 class OllamaBackendOptions:
     mode: OllamaMode = OllamaMode.LOCAL
-    model: str = "qwen2.5:7b"
+    model: str = "demonbyron/HY-MT1.5-1.8B"
 
     # chat options (temperature, top_p, num_ctx, repeat_penalty, ...)
     options: Dict[str, Any] = field(default_factory=lambda: {"temperature": 0.0})

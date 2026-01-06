@@ -166,6 +166,9 @@ def join_interleaved(pairs: List[AlignedPair], join_with: str = "\n") -> str:
     for p in pairs:
         blocks.append(p.source)
         blocks.append(p.target)
+        blocks.append("")  # blank line between source/target pairs
+    if blocks:
+        blocks.pop()  # remove trailing blank line
     return join_with.join(blocks)
 
 def render_output(pairs: List[AlignedPair], mode: OutputMode, join_with: str = "\n") -> str:
