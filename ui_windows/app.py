@@ -29,17 +29,19 @@ from core import (
 )
 from core.prompt import PromptOptions, build_prompt
 from core.postprocess import extract_translation
-from ui_mac.hotkey_mac import DoubleCmdCListener
-from ui_mac.ocr import get_paste_image_paths, get_paste_images, run_ocr_async, run_ocr_async_images
-
-try:
-    from AppKit import NSApplication
-except Exception:  # noqa: BLE001 - optional dependency
-    NSApplication = None
+from ui_windows.hotkey_windows import DoubleCtrlCListener
+from ui_windows.ocr import (
+    get_paste_image_paths,
+    get_paste_images,
+    is_ocr_available,
+    run_ocr_async,
+    run_ocr_async_images,
+)
 
 
 class TranslatorApp:
     def __init__(self):
+        self._set_windows_dpi()
         self.root = tk.Tk()
         self.root.title("Translator")
         self.root.geometry("720x560")
@@ -54,16 +56,44 @@ class TranslatorApp:
         self.host_var = tk.StringVar(value="http://127.0.0.1:11434")
         self.model_var = tk.StringVar(value=OllamaBackendOptions().model)
         self.font_size_var = tk.IntVar(value=14)
+        self.hotkey_enabled_var = tk.BooleanVar(value=True)
+        self.minimize_to_tray_var = tk.BooleanVar(value=True)
 
         self._job_lock = threading.Lock()
         self._current_job_id = 0
         self._cancel_event: Optional[threading.Event] = None
+        self._tray_icon = None
+        self._tray_thread = None
+        self._settings_window = None
 
-        self._font = Font(size=self.font_size_var.get())
+        self._font = Font(family="Segoe UI", size=self.font_size_var.get())
         self._load_config()
+        self._apply_default_font()
         self._build_ui()
         self._wire_persist()
         self._setup_hotkey()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _set_windows_dpi(self):
+        if not sys.platform.startswith("win"):
+            return
+        try:
+            import ctypes
+
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            except Exception:
+                ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+    def _apply_default_font(self):
+        if not sys.platform.startswith("win"):
+            return
+        try:
+            self.root.option_add("*Font", "{Segoe UI} 10")
+        except Exception:
+            pass
 
     def _build_ui(self):
         main = ttk.Frame(self.root, padding=12)
@@ -72,11 +102,12 @@ class TranslatorApp:
         header = ttk.Frame(main)
         header.pack(fill="x")
         ttk.Label(header, text="Translator").pack(side="left")
-        self.translate_button = ttk.Button(header, text="Translate", command=self.translate_input)
-        self.translate_button.pack(side="right")
+        ttk.Button(header, text="Settings", command=self._open_settings).pack(side="right")
+        ttk.Button(header, text="Quit", command=self._exit_app).pack(side="right", padx=(0, 8))
         self.stop_button = ttk.Button(header, text="Stop", command=self.cancel_translation, state="disabled")
         self.stop_button.pack(side="right", padx=(0, 8))
-        ttk.Button(header, text="Quit", command=self.root.destroy).pack(side="right", padx=(0, 8))
+        self.translate_button = ttk.Button(header, text="Translate", command=self.translate_input)
+        self.translate_button.pack(side="right")
 
         controls = ttk.Frame(main)
         controls.pack(fill="x", pady=(8, 8))
@@ -168,10 +199,9 @@ class TranslatorApp:
         self.status_var = tk.StringVar(value="Ready")
         ttk.Label(main, textvariable=self.status_var).pack(anchor="w")
         self._create_context_menus()
-        self.input_text.bind("<Command-v>", self._handle_paste)
         self.input_text.bind("<Control-v>", self._handle_paste)
         self.input_text.bind("<<Paste>>", self._handle_paste)
-        self.root.bind_all("<Command-v>", self._handle_paste, add="+")
+        self.root.bind_all("<Control-v>", self._handle_paste, add="+")
         self.root.bind_all("<<Paste>>", self._handle_paste, add="+")
         self.input_text.bind("<Button-2>", self._show_input_menu)
         self.input_text.bind("<Button-3>", self._show_input_menu)
@@ -182,24 +212,17 @@ class TranslatorApp:
         def on_trigger():
             self.root.after(0, self._handle_hotkey)
 
-        listener = DoubleCmdCListener(on_trigger=on_trigger)
+        listener = DoubleCtrlCListener(on_trigger=on_trigger)
         t = threading.Thread(target=self._run_hotkey_listener, args=(listener,), daemon=True)
         t.start()
 
-    def _run_hotkey_listener(self, listener: DoubleCmdCListener):
+    def _run_hotkey_listener(self, listener: DoubleCtrlCListener):
         try:
             listener.run()
         except Exception as exc:
-            self.root.after(
-                0,
-                lambda exc=exc: self.status_var.set(
-                    f"Hotkey disabled: {exc}"
-                ),
-            )
+            self.root.after(0, lambda exc=exc: self.status_var.set(f"Hotkey disabled: {exc}"))
 
     def _activate_window(self):
-        if NSApplication is not None:
-            NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
@@ -207,6 +230,8 @@ class TranslatorApp:
         self.root.after(120, lambda: self.root.attributes("-topmost", False))
 
     def _handle_hotkey(self):
+        if not self.hotkey_enabled_var.get():
+            return
         self._activate_window()
         text = pyperclip.paste()
         if text:
@@ -220,18 +245,15 @@ class TranslatorApp:
         widget = getattr(event, "widget", None)
         if widget is not None and widget is not self.input_text:
             return None
-        print("OCR: paste event triggered")
+        if not is_ocr_available():
+            return None
         paths = get_paste_image_paths(self.root)
         if not paths:
-            print("OCR: no image paths found, trying image data")
             images = get_paste_images()
             if not images:
-                print("OCR: no image data found")
                 return None
-            print(f"OCR: start for {len(images)} image(s) from clipboard")
             self._start_ocr_images(images)
             return "break"
-        print(f"OCR: start for {paths}")
         self._start_ocr(paths)
         return "break"
 
@@ -475,6 +497,8 @@ class TranslatorApp:
             self.host_var,
             self.model_var,
             self.font_size_var,
+            self.hotkey_enabled_var,
+            self.minimize_to_tray_var,
         ]:
             var.trace_add("write", lambda *_: self._save_config())
         self.layout_var.trace_add("write", lambda *_: self._rebuild_panes())
@@ -496,6 +520,8 @@ class TranslatorApp:
         self.mode_var.set(data.get("mode", self.mode_var.get()))
         self.host_var.set(data.get("host", self.host_var.get()))
         self.model_var.set(data.get("model", self.model_var.get()))
+        self.hotkey_enabled_var.set(bool(data.get("hotkey_enabled", self.hotkey_enabled_var.get())))
+        self.minimize_to_tray_var.set(bool(data.get("minimize_to_tray", self.minimize_to_tray_var.get())))
         font_size = data.get("font_size", self.font_size_var.get())
         if isinstance(font_size, int):
             self.font_size_var.set(font_size)
@@ -512,6 +538,8 @@ class TranslatorApp:
             "host": self.host_var.get(),
             "model": self.model_var.get(),
             "font_size": self.font_size_var.get(),
+            "hotkey_enabled": self.hotkey_enabled_var.get(),
+            "minimize_to_tray": self.minimize_to_tray_var.get(),
         }
         try:
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -560,6 +588,104 @@ class TranslatorApp:
         else:
             self.config_box.grid_configure(row=0, column=0, columnspan=1, padx=(0, 8), pady=0)
             self.setting_box.grid_configure(row=0, column=1, columnspan=1, padx=0, pady=0)
+
+    def _open_settings(self):
+        if self._settings_window is not None and self._settings_window.winfo_exists():
+            self._settings_window.lift()
+            self._settings_window.focus_force()
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Settings")
+        win.resizable(False, False)
+        win.transient(self.root)
+        self._settings_window = win
+
+        box = ttk.Frame(win, padding=12)
+        box.pack(fill="both", expand=True)
+
+        ttk.Checkbutton(
+            box,
+            text="Enable Ctrl+C Ctrl+C hotkey",
+            variable=self.hotkey_enabled_var,
+        ).pack(anchor="w", pady=(0, 6))
+
+        ttk.Checkbutton(
+            box,
+            text="Minimize to tray on close",
+            variable=self.minimize_to_tray_var,
+        ).pack(anchor="w")
+
+        ttk.Button(box, text="Close", command=win.destroy).pack(anchor="e", pady=(12, 0))
+
+        def on_close():
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
+    def _on_close(self):
+        if self.minimize_to_tray_var.get() and self._ensure_tray_icon():
+            self._hide_to_tray()
+            return
+        self._exit_app()
+
+    def _exit_app(self):
+        self._stop_tray_icon()
+        self.root.destroy()
+
+    def _hide_to_tray(self):
+        self.root.withdraw()
+        try:
+            if self._tray_icon is not None:
+                self._tray_icon.visible = True
+        except Exception:
+            pass
+
+    def _show_from_tray(self):
+        self._activate_window()
+        try:
+            if self._tray_icon is not None:
+                self._tray_icon.visible = False
+        except Exception:
+            pass
+
+    def _ensure_tray_icon(self) -> bool:
+        if self._tray_icon is not None:
+            return True
+        try:
+            import pystray
+            from PIL import Image, ImageDraw
+        except Exception:
+            self.status_var.set("Tray icon requires pystray and pillow.")
+            return False
+
+        image = Image.new("RGB", (64, 64), color=(40, 40, 40))
+        draw = ImageDraw.Draw(image)
+        draw.rectangle([8, 8, 56, 56], outline=(255, 255, 255), width=3)
+        draw.text((22, 18), "T", fill=(255, 255, 255))
+
+        def on_open(icon, item):
+            self.root.after(0, self._show_from_tray)
+
+        def on_quit(icon, item):
+            self.root.after(0, self._exit_app)
+
+        menu = pystray.Menu(
+            pystray.MenuItem("Open", on_open, default=True),
+            pystray.MenuItem("Quit", on_quit),
+        )
+
+        self._tray_icon = pystray.Icon("Translator", image, "Translator", menu)
+        self._tray_thread = threading.Thread(target=self._tray_icon.run, daemon=True)
+        self._tray_thread.start()
+        return True
+
+    def _stop_tray_icon(self):
+        if self._tray_icon is None:
+            return
+        try:
+            self._tray_icon.stop()
+        except Exception:
+            pass
 
     def run(self):
         self.root.mainloop()

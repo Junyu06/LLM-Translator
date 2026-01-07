@@ -1,0 +1,13 @@
+{
+  "source_lang": "auto",
+  "target_lang": "zh",
+  "output_mode": "translations_only",
+  "layout": "horizontal",
+  "use_context": false,
+  "mode": "http",
+  "host": "http://127.0.0.1:11434",
+  "model": "demonbyron/HY-MT1.5-1.8B",
+  "font_size": 16,
+  "hotkey_enabled": true,
+  "minimize_to_tray": true
+}

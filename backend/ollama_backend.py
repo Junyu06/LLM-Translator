@@ -3,6 +3,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
+import sys
 from typing import Any, Dict
 
 from .errors import BackendUnavailableError, BackendRequestError, ModelNotFoundError
@@ -64,6 +65,8 @@ class OllamaBackend:
     # ---------- LOCAL (python package) ----------
 
     def _chat_local(self, messages: list[dict]) -> str:
+        if sys.platform.startswith("win"):
+            return self._chat_http(messages)
         try:
             import ollama  # type: ignore
         except Exception as e:
@@ -89,6 +92,8 @@ class OllamaBackend:
             raise BackendRequestError(f"ollama.chat failed: {e}") from e
 
     def _chat_local_stream(self, messages: list[dict]):
+        if sys.platform.startswith("win"):
+            return self._chat_http_stream(messages)
         try:
             import ollama  # type: ignore
         except Exception as e:
