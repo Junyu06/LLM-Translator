@@ -14,7 +14,9 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "ui_config.json")
+def _get_config_path() -> str:
+    base = os.path.expanduser("~/Library/Application Support/Translator")
+    return os.path.join(base, "ui_config.json")
 
 from backend import OllamaBackend, OllamaBackendOptions, OllamaMode
 from core import (
@@ -54,10 +56,13 @@ class TranslatorApp:
         self.host_var = tk.StringVar(value="http://127.0.0.1:11434")
         self.model_var = tk.StringVar(value=OllamaBackendOptions().model)
         self.font_size_var = tk.IntVar(value=14)
+        self.hotkey_enabled_var = tk.BooleanVar(value=True)
 
         self._job_lock = threading.Lock()
         self._current_job_id = 0
         self._cancel_event: Optional[threading.Event] = None
+        self._settings_window = None
+        self._config_path = _get_config_path()
 
         self._font = Font(size=self.font_size_var.get())
         self._load_config()
@@ -77,6 +82,7 @@ class TranslatorApp:
         self.stop_button = ttk.Button(header, text="Stop", command=self.cancel_translation, state="disabled")
         self.stop_button.pack(side="right", padx=(0, 8))
         ttk.Button(header, text="Quit", command=self.root.destroy).pack(side="right", padx=(0, 8))
+        ttk.Button(header, text="Settings", command=self._open_settings).pack(side="right")
 
         controls = ttk.Frame(main)
         controls.pack(fill="x", pady=(8, 8))
@@ -207,6 +213,8 @@ class TranslatorApp:
         self.root.after(120, lambda: self.root.attributes("-topmost", False))
 
     def _handle_hotkey(self):
+        if not self.hotkey_enabled_var.get():
+            return
         self._activate_window()
         text = pyperclip.paste()
         if text:
@@ -475,15 +483,16 @@ class TranslatorApp:
             self.host_var,
             self.model_var,
             self.font_size_var,
+            self.hotkey_enabled_var,
         ]:
             var.trace_add("write", lambda *_: self._save_config())
         self.layout_var.trace_add("write", lambda *_: self._rebuild_panes())
 
     def _load_config(self):
-        if not os.path.exists(CONFIG_PATH):
+        if not os.path.exists(self._config_path):
             return
         try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            with open(self._config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception:
             return
@@ -496,6 +505,7 @@ class TranslatorApp:
         self.mode_var.set(data.get("mode", self.mode_var.get()))
         self.host_var.set(data.get("host", self.host_var.get()))
         self.model_var.set(data.get("model", self.model_var.get()))
+        self.hotkey_enabled_var.set(bool(data.get("hotkey_enabled", self.hotkey_enabled_var.get())))
         font_size = data.get("font_size", self.font_size_var.get())
         if isinstance(font_size, int):
             self.font_size_var.set(font_size)
@@ -512,9 +522,11 @@ class TranslatorApp:
             "host": self.host_var.get(),
             "model": self.model_var.get(),
             "font_size": self.font_size_var.get(),
+            "hotkey_enabled": self.hotkey_enabled_var.get(),
         }
         try:
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            os.makedirs(os.path.dirname(self._config_path), exist_ok=True)
+            with open(self._config_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=True, indent=2)
         except Exception:
             pass
@@ -560,6 +572,33 @@ class TranslatorApp:
         else:
             self.config_box.grid_configure(row=0, column=0, columnspan=1, padx=(0, 8), pady=0)
             self.setting_box.grid_configure(row=0, column=1, columnspan=1, padx=0, pady=0)
+
+    def _open_settings(self):
+        if self._settings_window is not None and self._settings_window.winfo_exists():
+            self._settings_window.lift()
+            self._settings_window.focus_force()
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Settings")
+        win.resizable(False, False)
+        win.transient(self.root)
+        self._settings_window = win
+
+        box = ttk.Frame(win, padding=12)
+        box.pack(fill="both", expand=True)
+
+        ttk.Checkbutton(
+            box,
+            text="Enable Cmd+C Cmd+C hotkey",
+            variable=self.hotkey_enabled_var,
+        ).pack(anchor="w")
+
+        ttk.Button(box, text="Close", command=win.destroy).pack(anchor="e", pady=(12, 0))
+
+        def on_close():
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
 
     def run(self):
         self.root.mainloop()

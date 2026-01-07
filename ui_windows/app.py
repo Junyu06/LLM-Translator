@@ -14,7 +14,9 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "ui_config.json")
+def _get_config_path() -> str:
+    base = os.getenv("APPDATA") or os.getenv("LOCALAPPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "Translator", "ui_config.json")
 
 from backend import OllamaBackend, OllamaBackendOptions, OllamaMode
 from core import (
@@ -65,6 +67,8 @@ class TranslatorApp:
         self._tray_icon = None
         self._tray_thread = None
         self._settings_window = None
+        self._config_path = _get_config_path()
+        self._last_geometry: Optional[str] = None
 
         self._font = Font(family="Segoe UI", size=self.font_size_var.get())
         self._load_config()
@@ -73,6 +77,7 @@ class TranslatorApp:
         self._wire_persist()
         self._setup_hotkey()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.bind("<Configure>", self._on_root_configure)
 
     def _set_windows_dpi(self):
         if not sys.platform.startswith("win"):
@@ -504,10 +509,10 @@ class TranslatorApp:
         self.layout_var.trace_add("write", lambda *_: self._rebuild_panes())
 
     def _load_config(self):
-        if not os.path.exists(CONFIG_PATH):
+        if not os.path.exists(self._config_path):
             return
         try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            with open(self._config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception:
             return
@@ -526,6 +531,12 @@ class TranslatorApp:
         if isinstance(font_size, int):
             self.font_size_var.set(font_size)
             self._font.configure(size=font_size)
+        geometry = data.get("window_geometry")
+        if isinstance(geometry, str) and geometry:
+            try:
+                self.root.geometry(geometry)
+            except Exception:
+                pass
 
     def _save_config(self):
         data = {
@@ -540,9 +551,11 @@ class TranslatorApp:
             "font_size": self.font_size_var.get(),
             "hotkey_enabled": self.hotkey_enabled_var.get(),
             "minimize_to_tray": self.minimize_to_tray_var.get(),
+            "window_geometry": self._last_geometry or self.root.geometry(),
         }
         try:
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            os.makedirs(os.path.dirname(self._config_path), exist_ok=True)
+            with open(self._config_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=True, indent=2)
         except Exception:
             pass
@@ -589,6 +602,10 @@ class TranslatorApp:
             self.config_box.grid_configure(row=0, column=0, columnspan=1, padx=(0, 8), pady=0)
             self.setting_box.grid_configure(row=0, column=1, columnspan=1, padx=0, pady=0)
 
+    def _on_root_configure(self, event):
+        if event.widget is self.root:
+            self._last_geometry = self.root.geometry()
+
     def _open_settings(self):
         if self._settings_window is not None and self._settings_window.winfo_exists():
             self._settings_window.lift()
@@ -623,12 +640,14 @@ class TranslatorApp:
         win.protocol("WM_DELETE_WINDOW", on_close)
 
     def _on_close(self):
+        self._save_config()
         if self.minimize_to_tray_var.get() and self._ensure_tray_icon():
             self._hide_to_tray()
             return
         self._exit_app()
 
     def _exit_app(self):
+        self._save_config()
         self._stop_tray_icon()
         self.root.destroy()
 
