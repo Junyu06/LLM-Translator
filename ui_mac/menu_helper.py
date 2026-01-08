@@ -1,7 +1,14 @@
 import argparse
 import socket
 
-from AppKit import NSApplication, NSMenu, NSMenuItem, NSStatusBar, NSVariableStatusItemLength
+from AppKit import (
+    NSApplication,
+    NSApplicationActivationPolicyAccessory,
+    NSMenu,
+    NSMenuItem,
+    NSStatusBar,
+    NSVariableStatusItemLength,
+)
 from Foundation import NSObject
 from PyObjCTools import AppHelper
 import objc
@@ -33,8 +40,16 @@ class _MenuHandler(NSObject):
         AppHelper.stopEventLoop()
 
 
+def _set_agent_mode():
+    try:
+        app = NSApplication.sharedApplication()
+        app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+    except Exception:
+        pass
+
+
 def run(port: int, token: str):
-    NSApplication.sharedApplication()
+    _set_agent_mode()
     handler = _MenuHandler.alloc().initWithPort_token_(port, token)
 
     status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(NSVariableStatusItemLength)

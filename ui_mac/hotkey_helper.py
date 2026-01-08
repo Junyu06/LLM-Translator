@@ -11,7 +11,17 @@ if ROOT_DIR not in sys.path:
 from ui_mac.hotkey_mac import DoubleCmdCListener  # noqa: E402
 
 
+def _set_agent_mode():
+    try:
+        from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+        app = NSApplication.sharedApplication()
+        app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+    except Exception:
+        pass
+
+
 def run(port: int, token: str):
+    _set_agent_mode()
     def on_trigger():
         nonlocal sock
         try:
