@@ -19,6 +19,7 @@ a = Analysis(
         ('ui_mac', 'ui_mac'),
     ],
     hiddenimports=[
+        "__future__",
         "AppKit",
         "Foundation",
         "Quartz",
@@ -27,7 +28,8 @@ a = Analysis(
         "ui_mac.hotkey_helper",
         "ui_mac.menu_helper",
         "PyObjCTools",
-    ] + collect_submodules("backend") + collect_submodules("core") + collect_submodules("ui_mac"),
+        "PyObjCTools.AppHelper",
+    ] + collect_submodules("backend") + collect_submodules("core") + collect_submodules("ui_mac") + collect_submodules("PyObjCTools"),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
