@@ -69,8 +69,9 @@ app = BUNDLE(
     coll,
     name='Translator.app',
     icon=None,
-    bundle_identifier=None,
+    bundle_identifier='com.teriri.translator',
     info_plist={
-        "LSUIElement": True,
+        'CFBundleDisplayName': 'Translator',
+        'CFBundleName': 'Translator',
     },
 )
