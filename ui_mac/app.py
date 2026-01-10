@@ -2,6 +2,13 @@ import json
 import os
 import sys
 import threading
+import subprocess
+import socket
+import select
+import secrets
+import atexit
+import logging
+import traceback
 from typing import Optional
 import tkinter as tk
 from tkinter import ttk
@@ -12,13 +19,31 @@ from tkinter.font import Font
 import pyperclip
 import subprocess
 
-ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    ROOT_DIR = sys._MEIPASS
+else:
+    ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 def _get_config_path() -> str:
     base = os.path.expanduser("~/Library/Application Support/Translator")
     return os.path.join(base, "ui_config.json")
+
+
+def _init_logging():
+    log_dir = os.path.expanduser("~/Library/Application Support/Translator")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except Exception:
+        return
+    log_path = os.path.join(log_dir, "app.log")
+    logging.basicConfig(
+        filename=log_path,
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+    logging.info("Startup: argv=%s executable=%s", sys.argv, sys.executable)
 
 from backend import OllamaBackend, OllamaBackendOptions, OllamaMode
 from core import (
@@ -35,11 +60,21 @@ from core.prompt import PromptOptions, build_prompt
 from core.postprocess import extract_translation
 from ui_mac.hotkey_mac import DoubleCmdCListener, ensure_accessibility
 from ui_mac.ocr import get_paste_image_paths, get_paste_images, run_ocr_async, run_ocr_async_images
+from ui_mac import hotkey_helper as hotkey_helper_module
+from ui_mac import menu_helper as menu_helper_module
 
-try:
-    from AppKit import NSApplication
-except Exception:  # noqa: BLE001 - optional dependency
-    NSApplication = None
+
+def _maybe_run_helper() -> None:
+    if "--hotkey-helper" in sys.argv:
+        args = sys.argv[1:]
+        args.remove("--hotkey-helper")
+        hotkey_helper_module.main(args)
+        sys.exit(0)
+    if "--menu-helper" in sys.argv:
+        args = sys.argv[1:]
+        args.remove("--menu-helper")
+        menu_helper_module.main(args)
+        sys.exit(0)
 
 
 class TranslatorApp:
@@ -59,6 +94,7 @@ class TranslatorApp:
         self.model_var = tk.StringVar(value=OllamaBackendOptions().model)
         self.font_size_var = tk.IntVar(value=14)
         self.hotkey_enabled_var = tk.BooleanVar(value=True)
+        self.minimize_to_tray_var = tk.BooleanVar(value=True)
 
         self._job_lock = threading.Lock()
         self._current_job_id = 0
@@ -66,10 +102,18 @@ class TranslatorApp:
         self._settings_window = None
         self._permission_prompted = False
         self._config_path = _get_config_path()
+        self._hotkey_listener = None
+        self._hotkey_server = None
+        self._hotkey_proc = None
+        self._menu_proc = None
+        self._hotkey_token = None
+        self._hotkey_clients = {}
 
         self._font = Font(size=self.font_size_var.get())
         self._load_config()
         self._build_ui()
+        self._start_ipc_server()
+        self._start_menu_helper()
         self._wire_persist()
         self._setup_hotkey()
 
@@ -84,8 +128,9 @@ class TranslatorApp:
         self.translate_button.pack(side="right")
         self.stop_button = ttk.Button(header, text="Stop", command=self.cancel_translation, state="disabled")
         self.stop_button.pack(side="right", padx=(0, 8))
-        ttk.Button(header, text="Quit", command=self.root.destroy).pack(side="right", padx=(0, 8))
+        ttk.Button(header, text="Quit", command=self._quit_app).pack(side="right", padx=(0, 8))
         ttk.Button(header, text="Settings", command=self._open_settings).pack(side="right")
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         controls = ttk.Frame(main)
         controls.pack(fill="x", pady=(8, 8))
@@ -193,14 +238,14 @@ class TranslatorApp:
             self.status_var.set(
                 "Grant Accessibility/Input Monitoring in System Settings and restart for hotkey."
             )
-            self._prompt_accessibility_permissions()
+            self._prompt_accessility_permissions()
             return
         def on_trigger():
             self.root.after(0, self._handle_hotkey)
 
         listener = DoubleCmdCListener(on_trigger=on_trigger)
-        t = threading.Thread(target=self._run_hotkey_listener, args=(listener,), daemon=True)
-        t.start()
+        self._hotkey_listener = listener
+        self._run_hotkey_listener(listener)
 
     def _prompt_accessibility_permissions(self):
         if self._permission_prompted:
@@ -226,7 +271,7 @@ class TranslatorApp:
 
     def _run_hotkey_listener(self, listener: DoubleCmdCListener):
         try:
-            listener.run()
+            listener.install()
         except Exception as exc:
             self.root.after(
                 0,
@@ -236,14 +281,209 @@ class TranslatorApp:
             )
             self.root.after(0, self._prompt_accessibility_permissions)
 
+    def _start_ipc_server(self) -> bool:
+        if self._hotkey_server is not None:
+            return True
+        try:
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.bind(("127.0.0.1", 0))
+            server.listen(1)
+        except Exception as exc:
+            self.status_var.set(f"IPC server disabled: {exc}")
+            return False
+        self._hotkey_server = server
+        self._hotkey_server.setblocking(False)
+        self._hotkey_token = secrets.token_hex(16)
+        self._hotkey_clients = {}
+        self.root.after(120, self._poll_hotkey_socket)
+        return True
+
+    def _start_hotkey_helper(self) -> bool:
+        if os.environ.get("TRANSLATOR_DISABLE_HOTKEY_HELPER") == "1":
+            return False
+        if self._hotkey_proc is not None and self._hotkey_proc.poll() is None:
+            return True
+        if self._hotkey_server is None or self._hotkey_token is None:
+            return False
+        port = self._hotkey_server.getsockname()[1]
+        token = self._hotkey_token
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--hotkey-helper", "--port", str(port), "--token", token]
+        else:
+            helper_path = os.path.join(os.path.dirname(__file__), "hotkey_helper.py")
+            cmd = [sys.executable, helper_path, "--port", str(port), "--token", token]
+        try:
+            self._hotkey_proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            atexit.register(self._stop_hotkey_helper)
+            self.root.after(2000, self._check_hotkey_helper)
+            return True
+        except Exception as exc:
+            self.status_var.set(f"Hotkey helper failed: {exc}")
+            return False
+
+    def _start_menu_helper(self):
+        if os.environ.get("TRANSLATOR_DISABLE_MENU_HELPER") == "1":
+            return
+        if self._menu_proc is not None and self._menu_proc.poll() is None:
+            return
+        if self._hotkey_server is None or self._hotkey_token is None:
+            return
+        port = self._hotkey_server.getsockname()[1]
+        token = self._hotkey_token
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--menu-helper", "--port", str(port), "--token", token]
+        else:
+            helper_path = os.path.join(os.path.dirname(__file__), "menu_helper.py")
+            cmd = [sys.executable, helper_path, "--port", str(port), "--token", token]
+        try:
+            self._menu_proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            atexit.register(self._stop_hotkey_helper)
+        except Exception as exc:
+            self.status_var.set(f"Menu helper failed: {exc}")
+
+    def _stop_hotkey_process(self):
+        if self._hotkey_proc is not None:
+            try:
+                self._hotkey_proc.terminate()
+            except Exception:
+                pass
+            self._hotkey_proc = None
+
+    def _stop_hotkey_helper(self):
+        self._stop_hotkey_process()
+        if self._menu_proc is not None:
+            try:
+                self._menu_proc.terminate()
+            except Exception:
+                pass
+            self._menu_proc = None
+        if self._hotkey_server is not None:
+            try:
+                self._hotkey_server.close()
+            except Exception:
+                pass
+            self._hotkey_server = None
+        for client in list(self._hotkey_clients.keys()):
+            try:
+                client.close()
+            except Exception:
+                pass
+        self._hotkey_clients = {}
+
+    def _check_hotkey_helper(self):
+        if self._hotkey_proc is None:
+            return
+        if self._hotkey_proc.poll() is not None:
+            self.status_var.set("Hotkey helper restarted.")
+            self._stop_hotkey_process()
+            self._start_hotkey_helper()
+            return
+        self.root.after(2000, self._check_hotkey_helper)
+
+    def _poll_hotkey_socket(self):
+        server = self._hotkey_server
+        if server is None:
+            return
+        read_list = [server] + list(self._hotkey_clients.keys())
+        try:
+            readable, _, _ = select.select(read_list, [], [], 0)
+        except Exception:
+            self.root.after(200, self._poll_hotkey_socket)
+            return
+        for sock in readable:
+            if sock is server:
+                try:
+                    conn, _ = server.accept()
+                    conn.setblocking(False)
+                    self._hotkey_clients[conn] = {"authed": False, "buf": ""}
+                except Exception:
+                    continue
+                continue
+            try:
+                data = sock.recv(4096)
+            except Exception:
+                data = b""
+            if not data:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                self._hotkey_clients.pop(sock, None)
+                continue
+            state = self._hotkey_clients.get(sock)
+            if state is None:
+                continue
+            buf = state["buf"] + data.decode("utf-8", errors="replace")
+            while "\n" in buf:
+                line, buf = buf.split("\n", 1)
+                line = line.strip()
+                if not state["authed"]:
+                    if line == self._hotkey_token:
+                        state["authed"] = True
+                    else:
+                        try:
+                            sock.close()
+                        except Exception:
+                            pass
+                        self._hotkey_clients.pop(sock, None)
+                        break
+                else:
+                    try:
+                        if line == "TRIGGER":
+                            if self.hotkey_enabled_var.get():
+                                self._handle_hotkey()
+                        elif line == "OPEN":
+                            self._show_from_tray()
+                        elif line == "QUIT":
+                            self._quit_app()
+                    except Exception as exc:
+                        self.status_var.set(f"IPC action failed: {exc}")
+            state["buf"] = buf
+        self.root.after(120, self._poll_hotkey_socket)
+
     def _activate_window(self):
-        if NSApplication is not None:
-            NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         self.root.deiconify()
         self.root.lift()
         self.root.focus_force()
         self.root.attributes("-topmost", True)
         self.root.after(120, lambda: self.root.attributes("-topmost", False))
+
+    def _hide_to_tray(self) -> bool:
+        self.root.withdraw()
+        return True
+
+    def _show_from_tray(self):
+        self._activate_window()
+
+    def _quit_app(self):
+        self._stop_hotkey_helper()
+        self.root.destroy()
+
+    def _on_close(self):
+        if self.minimize_to_tray_var.get():
+            if not self._hide_to_tray():
+                self._quit_app()
+            return
+        self._quit_app()
+
+    def _open_permissions(self):
+        urls = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+        ]
+        for url in urls:
+            try:
+                subprocess.run(["open", url], check=False)
+            except Exception:
+                pass
 
     def _handle_hotkey(self):
         if not self.hotkey_enabled_var.get():
@@ -517,6 +757,7 @@ class TranslatorApp:
             self.model_var,
             self.font_size_var,
             self.hotkey_enabled_var,
+            self.minimize_to_tray_var,
         ]:
             var.trace_add("write", lambda *_: self._save_config())
         self.layout_var.trace_add("write", lambda *_: self._rebuild_panes())
@@ -539,6 +780,7 @@ class TranslatorApp:
         self.host_var.set(data.get("host", self.host_var.get()))
         self.model_var.set(data.get("model", self.model_var.get()))
         self.hotkey_enabled_var.set(bool(data.get("hotkey_enabled", self.hotkey_enabled_var.get())))
+        self.minimize_to_tray_var.set(bool(data.get("minimize_to_tray", self.minimize_to_tray_var.get())))
         font_size = data.get("font_size", self.font_size_var.get())
         if isinstance(font_size, int):
             self.font_size_var.set(font_size)
@@ -556,6 +798,7 @@ class TranslatorApp:
             "model": self.model_var.get(),
             "font_size": self.font_size_var.get(),
             "hotkey_enabled": self.hotkey_enabled_var.get(),
+            "minimize_to_tray": self.minimize_to_tray_var.get(),
         }
         try:
             os.makedirs(os.path.dirname(self._config_path), exist_ok=True)
@@ -625,6 +868,16 @@ class TranslatorApp:
             text="Enable Cmd+C Cmd+C hotkey",
             variable=self.hotkey_enabled_var,
         ).pack(anchor="w")
+        ttk.Checkbutton(
+            box,
+            text="Minimize to menu bar on close",
+            variable=self.minimize_to_tray_var,
+        ).pack(anchor="w", pady=(6, 0))
+        ttk.Button(
+            box,
+            text="Open Accessibility / Input Monitoring Permissions",
+            command=self._open_permissions,
+        ).pack(anchor="w", pady=(10, 0))
 
         ttk.Button(box, text="Close", command=win.destroy).pack(anchor="e", pady=(12, 0))
 
@@ -638,4 +891,10 @@ class TranslatorApp:
 
 
 if __name__ == "__main__":
-    TranslatorApp().run()
+    _init_logging()
+    try:
+        _maybe_run_helper()
+        TranslatorApp().run()
+    except Exception:
+        logging.error("Fatal error:\n%s", traceback.format_exc())
+        raise
