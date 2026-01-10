@@ -1,65 +1,110 @@
 # Translator (Ollama Desktop)
 
-本项目是一个本地翻译桌面工具，核心流程是：全局热键触发 → 读取剪贴板 → 发送到本地 Ollama → UI 显示译文。  
-它不训练模型，只调用 Ollama 中的量化模型（如 GGUF）进行推理。
+Translator is a local desktop translation tool built on top of Ollama.
 
-## 解决的问题
+Its core workflow is:
 
-传统翻译流程需要来回切换应用、粘贴、等待结果。本项目把这个流程缩短为“复制两次即可翻译”，适合日常阅读与工作场景。
+**Global hotkey → Read clipboard → Send text to local Ollama → Display translation in UI**
 
-## 功能特性
+This project does **not** train or fine-tune models.  
+It only performs inference by calling quantized models (e.g. GGUF) already available in Ollama.
 
-- 全局热键触发（Windows: Ctrl+C Ctrl+C；macOS: Cmd+C Cmd+C）
-- 两种输出模式：`translations_only` / `interleaved`
-- 支持布局切换（vertical / horizontal）
-- 支持上下文分段翻译（Use Context）
-- OCR 识别图片粘贴文本（见下方说明）
-- 本地优先：默认使用本机 Ollama
-- 可切换 HTTP 模式，支持远程或 NAS 上的 Ollama 服务
+[中文说明](./README.zh.md)
 
-## 架构概览（文字说明）
+---
 
-UI 层（平台相关）
-→ 监听热键、读取剪贴板、弹出 UI
+## Problem It Solves
 
-Backend / 推理层
-→ 本地 Ollama 服务
-→ 加载量化模型
-→ 返回译文
+Traditional translation workflows require switching applications, pasting text, and waiting for results.
 
-本项目不包含训练或微调流程。
+Translator reduces this friction to a single action:  
+**copy text twice to get an instant translation**, making it well suited for daily reading and work scenarios.
 
-## 翻译质量策略
+---
 
-- 使用严格翻译提示词，尽量只输出译文
-- 通过分段与后处理提升稳定性
-- 目标是日常使用体验接近 DeepL，但不做夸大承诺
+## Features
 
-## OCR 说明
+- Global hotkey trigger  
+  - Windows: `Ctrl + C, Ctrl + C`  
+  - macOS: `Cmd + C, Cmd + C`
+- Two output modes:
+  - `translations_only`
+  - `interleaved`
+- Layout switching:
+  - vertical / horizontal
+- Context-aware segmented translation (`Use Context`)
+- OCR support for image clipboard content (see below)
+- Local-first design:
+  - Uses local Ollama by default
+- HTTP mode support:
+  - Allows connecting to remote or NAS-hosted Ollama services
 
-- macOS：使用系统 Vision OCR
-- Windows：使用 WinRT OCR（依赖系统 OCR 语言包）
-- 如果系统未安装对应 OCR 语言包，图片粘贴可能无法识别
-- OCR 仅在图片粘贴时触发，不影响纯文本粘贴
+---
 
-## 平台说明
+## Architecture Overview
 
-- Windows 端的 “Local” 模式内部会走 HTTP（127.0.0.1），用于避免 Python 客户端在 Windows 上卡住的情况
-- macOS 端直接使用本地客户端
+**UI Layer (platform-specific)**  
+→ Listens for global hotkeys  
+→ Reads clipboard content  
+→ Displays translation UI
 
-## 配置持久化
+**Backend / Inference Layer**  
+→ Local Ollama service  
+→ Loads quantized models  
+→ Returns translated text
 
-- macOS：配置存储在 `~/Library/Application Support/Translator/ui_config.json`
-- Windows：配置存储在 `%APPDATA%/Translator/ui_config.json`（打包后可正常保存）
+This project does **not** include any training or fine-tuning pipeline.
 
-## 限制与取舍
+---
 
-- 翻译质量依赖所选模型
-- 长文本质量依赖分段策略
-- OCR 依赖系统语言包，可能需要手动安装
+## Translation Quality Strategy
+
+- Uses strict translation prompts to minimize non-translation output
+- Improves stability through segmentation and post-processing
+- The goal is to achieve a daily-use experience close to DeepL  
+  (without exaggerated quality claims)
+
+---
+
+## OCR Support
+
+- **macOS**: Uses system Vision OCR
+- **Windows**: Uses WinRT OCR (requires installed system OCR language packs)
+
+Notes:
+- If the required OCR language pack is not installed, image clipboard text may not be recognized
+- OCR is only triggered for image clipboard content
+- Plain text clipboard usage is unaffected
+
+---
+
+## Platform Notes
+
+- On **Windows**, the “Local” mode internally uses HTTP (`127.0.0.1`)  
+  to avoid potential blocking issues with the Python client
+- On **macOS**, the local Ollama client is used directly
+
+---
+
+## Configuration Persistence
+
+- **macOS**:  
+  `~/Library/Application Support/Translator/ui_config.json`
+- **Windows**:  
+  `%APPDATA%/Translator/ui_config.json`
+
+---
+
+## Limitations & Trade-offs
+
+- Translation quality depends on the selected model
+- Long-text quality depends on segmentation strategy
+- OCR relies on system language packs and may require manual installation
+
+---
 
 ## Roadmap
 
-- 更好的长文本分段与上下文控制
-- 术语表/词汇控制
-- 进一步抽象后端，方便切换到其他引擎
+- Improved long-text segmentation and context control
+- Glossary / terminology control
+- Further backend abstraction to support alternative inference engines
