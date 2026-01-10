@@ -2,34 +2,21 @@
 
 
 import os
-from PyInstaller.utils.hooks import collect_submodules
 
-spec_dir = os.path.dirname(globals().get("__file__", os.getcwd()))
-project_root = os.path.abspath(spec_dir)
+project_root = os.path.abspath(os.getcwd())
 
 a = Analysis(
     ['ui_mac/app.py'],
     pathex=[project_root],
     binaries=[],
-    datas=[
-        ('ui_mac/hotkey_helper.py', 'ui_mac'),
-        ('ui_mac/menu_helper.py', 'ui_mac'),
-        ('backend', 'backend'),
-        ('core', 'core'),
-        ('ui_mac', 'ui_mac'),
-    ],
+    datas=[],
     hiddenimports=[
-        "__future__",
         "AppKit",
         "Foundation",
         "Quartz",
         "Vision",
         "objc",
-        "ui_mac.hotkey_helper",
-        "ui_mac.menu_helper",
-        "PyObjCTools",
-        "PyObjCTools.AppHelper",
-    ] + collect_submodules("backend") + collect_submodules("core") + collect_submodules("ui_mac") + collect_submodules("PyObjCTools"),
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

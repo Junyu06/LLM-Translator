@@ -50,8 +50,6 @@ class DoubleCmdCListener:
         self.on_trigger = on_trigger
         self.interval = interval_sec
         self._last_cmd_c_time = 0.0
-        self._tap = None
-        self._source = None
 
     def _callback(self, proxy, event_type, event, refcon):
         try:
@@ -73,20 +71,9 @@ class DoubleCmdCListener:
         except Exception:
             return event
 
-    def install(self):
-        if AXIsProcessTrustedWithOptions is not None and kAXTrustedCheckOptionPrompt is not None:
-            try:
-                if not AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True}):
-                    raise RuntimeError(
-                        "Accessibility permission is required for the hotkey."
-                    )
-            except Exception:
-                pass
-        self._install_quartz()
-
-    def _install_quartz(self):
+    def run(self):
         mask = _event_mask_bit(kCGEventKeyDown)
-        self._tap = CGEventTapCreate(
+        tap = CGEventTapCreate(
             kCGSessionEventTap,
             kCGHeadInsertEventTap,
             kCGEventTapOptionDefault,
@@ -94,17 +81,13 @@ class DoubleCmdCListener:
             self._callback,
             None
         )
-        if self._tap is None:
+        if tap is None:
             raise RuntimeError(
                 "Failed to create event tap. "
                 "You likely need to grant Accessibility/Input Monitoring permissions."
             )
 
-        self._source = CFMachPortCreateRunLoopSource(None, self._tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), self._source, kCFRunLoopCommonModes)
-        CGEventTapEnable(self._tap, True)
-
-    def run(self):
-        self.install()
-        if self._tap is not None:
-            CFRunLoopRun()
+        source = CFMachPortCreateRunLoopSource(None, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes)
+        CGEventTapEnable(tap, True)
+        CFRunLoopRun()
