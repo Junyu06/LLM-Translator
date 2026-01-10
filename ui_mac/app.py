@@ -5,10 +5,12 @@ import threading
 from typing import Optional
 import tkinter as tk
 from tkinter import ttk
+from tkinter import messagebox
 from tkinter.scrolledtext import ScrolledText
 from tkinter.font import Font
 
 import pyperclip
+import subprocess
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
@@ -31,7 +33,7 @@ from core import (
 )
 from core.prompt import PromptOptions, build_prompt
 from core.postprocess import extract_translation
-from ui_mac.hotkey_mac import DoubleCmdCListener
+from ui_mac.hotkey_mac import DoubleCmdCListener, ensure_accessibility
 from ui_mac.ocr import get_paste_image_paths, get_paste_images, run_ocr_async, run_ocr_async_images
 
 try:
@@ -62,6 +64,7 @@ class TranslatorApp:
         self._current_job_id = 0
         self._cancel_event: Optional[threading.Event] = None
         self._settings_window = None
+        self._permission_prompted = False
         self._config_path = _get_config_path()
 
         self._font = Font(size=self.font_size_var.get())
@@ -185,12 +188,41 @@ class TranslatorApp:
         self.output_text.bind("<Button-3>", self._show_output_menu)
 
     def _setup_hotkey(self):
+        trusted = ensure_accessibility(prompt=True)
+        if not trusted:
+            self.status_var.set(
+                "Grant Accessibility/Input Monitoring in System Settings and restart for hotkey."
+            )
+            self._prompt_accessibility_permissions()
+            return
         def on_trigger():
             self.root.after(0, self._handle_hotkey)
 
         listener = DoubleCmdCListener(on_trigger=on_trigger)
         t = threading.Thread(target=self._run_hotkey_listener, args=(listener,), daemon=True)
         t.start()
+
+    def _prompt_accessibility_permissions(self):
+        if self._permission_prompted:
+            return
+        self._permission_prompted = True
+        message = (
+            "Hotkey needs Accessibility and Input Monitoring permissions.\n"
+            "Open System Settings now?"
+        )
+        if messagebox.askokcancel("Permissions Required", message, parent=self.root):
+            self._open_system_permissions()
+
+    def _open_system_permissions(self):
+        urls = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+        ]
+        for url in urls:
+            try:
+                subprocess.run(["open", url], check=False)
+            except Exception:
+                continue
 
     def _run_hotkey_listener(self, listener: DoubleCmdCListener):
         try:
@@ -202,6 +234,7 @@ class TranslatorApp:
                     f"Hotkey disabled: {exc}"
                 ),
             )
+            self.root.after(0, self._prompt_accessibility_permissions)
 
     def _activate_window(self):
         if NSApplication is not None:

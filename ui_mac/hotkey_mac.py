@@ -17,6 +17,11 @@ from Quartz import (
     kCGKeyboardEventKeycode,
 )
 from Quartz import kCGEventFlagMaskCommand
+try:
+    from Quartz import AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
+except Exception:
+    AXIsProcessTrustedWithOptions = None
+    kAXTrustedCheckOptionPrompt = None
 
 try:
     from Quartz import kCGEventMaskBit  # type: ignore
@@ -27,6 +32,18 @@ except Exception:
 
 # mac keycode for 'c' (US layout): 8
 KEYCODE_C = 8
+
+
+def ensure_accessibility(prompt: bool = True) -> bool:
+    if AXIsProcessTrustedWithOptions is None:
+        return True
+    options = {}
+    if prompt and kAXTrustedCheckOptionPrompt is not None:
+        options = {kAXTrustedCheckOptionPrompt: True}
+    try:
+        return bool(AXIsProcessTrustedWithOptions(options))
+    except Exception:
+        return False
 
 class DoubleCmdCListener:
     def __init__(self, on_trigger, interval_sec=0.35):
