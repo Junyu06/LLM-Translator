@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import re
 import threading
 from typing import Optional
 import tkinter as tk
@@ -51,6 +52,7 @@ class TranslatorApp:
         self.source_lang_var = tk.StringVar(value="auto")
         self.target_lang_var = tk.StringVar(value="en")
         self.use_context_var = tk.BooleanVar(value=False)
+        self.collapse_newlines_var = tk.BooleanVar(value=False)
         self.output_mode_var = tk.StringVar(value=OutputMode.TRANSLATIONS_ONLY.value)
         self.layout_var = tk.StringVar(value="vertical")
 
@@ -166,6 +168,10 @@ class TranslatorApp:
         ttk.Checkbutton(
             self.setting_box, text="Use Context", variable=self.use_context_var
         ).grid(row=0, column=5, sticky="w")
+
+        ttk.Checkbutton(
+            self.setting_box, text="Collapse Newlines", variable=self.collapse_newlines_var
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         ttk.Label(self.setting_box, text="Output").grid(row=1, column=0, sticky="w", pady=(6, 0))
         ttk.Combobox(
@@ -435,7 +441,14 @@ class TranslatorApp:
             self.translate_button.configure(state="normal")
             self.stop_button.configure(state="disabled")
 
+    def _normalize_output_text(self, text: str) -> str:
+        if self.collapse_newlines_var.get():
+            normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+            return re.sub(r"\n{3,}", "\n\n", normalized)
+        return text
+
     def _set_output(self, text: str, status: Optional[str] = "Done."):
+        text = self._normalize_output_text(text)
         self.output_text.configure(state="normal")
         self.output_text.delete("1.0", "end")
         self.output_text.insert("1.0", text)
@@ -497,6 +510,7 @@ class TranslatorApp:
             self.target_lang_var,
             self.output_mode_var,
             self.use_context_var,
+            self.collapse_newlines_var,
             self.layout_var,
             self.mode_var,
             self.host_var,
@@ -522,6 +536,7 @@ class TranslatorApp:
         self.output_mode_var.set(data.get("output_mode", self.output_mode_var.get()))
         self.layout_var.set(data.get("layout", self.layout_var.get()))
         self.use_context_var.set(bool(data.get("use_context", self.use_context_var.get())))
+        self.collapse_newlines_var.set(bool(data.get("collapse_newlines", self.collapse_newlines_var.get())))
         self.mode_var.set(data.get("mode", self.mode_var.get()))
         self.host_var.set(data.get("host", self.host_var.get()))
         self.model_var.set(data.get("model", self.model_var.get()))
@@ -545,6 +560,7 @@ class TranslatorApp:
             "output_mode": self.output_mode_var.get(),
             "layout": self.layout_var.get(),
             "use_context": self.use_context_var.get(),
+            "collapse_newlines": self.collapse_newlines_var.get(),
             "mode": self.mode_var.get(),
             "host": self.host_var.get(),
             "model": self.model_var.get(),

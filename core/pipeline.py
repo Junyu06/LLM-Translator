@@ -198,14 +198,19 @@ def join_translations(pairs: List[AlignedPair], join_with: str = "\n") -> str:
 
 
 def join_interleaved(pairs: List[AlignedPair], join_with: str = "\n") -> str:
-    blocks: List[str] = []
+    parts = []
     for p in pairs:
-        blocks.append(p.source)
-        blocks.append(p.target)
-        blocks.append("")  # blank line between source/target pairs
-    if blocks:
-        blocks.pop()  # remove trailing blank line
-    return join_with.join(blocks)
+        src = p.source
+        tgt = p.target
+        if not src.strip() and not tgt.strip():
+            parts.append(("", False))
+            continue
+        parts.append((src, False))
+        parts.append((tgt, False))
+        parts.append(("", True))  # blank line between source/target pairs
+    if parts and parts[-1][1]:
+        parts.pop()
+    return join_with.join(text for text, _ in parts)
 
 def render_output(pairs: List[AlignedPair], mode: OutputMode, join_with: str = "\n") -> str:
     if mode == OutputMode.INTERLEAVED:
