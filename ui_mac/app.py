@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import threading
+import re
 from typing import Optional
 import tkinter as tk
 from tkinter import ttk
@@ -51,6 +52,7 @@ class TranslatorApp:
         self.source_lang_var = tk.StringVar(value="auto")
         self.target_lang_var = tk.StringVar(value="en")
         self.use_context_var = tk.BooleanVar(value=False)
+        self.collapse_newlines_var = tk.BooleanVar(value=False)
         self.output_mode_var = tk.StringVar(value=OutputMode.TRANSLATIONS_ONLY.value)
         self.layout_var = tk.StringVar(value="vertical")
 
@@ -139,6 +141,10 @@ class TranslatorApp:
         ttk.Checkbutton(
             self.setting_box, text="Use Context", variable=self.use_context_var
         ).grid(row=0, column=5, sticky="w")
+
+        ttk.Checkbutton(
+            self.setting_box, text="Collapse Newlines", variable=self.collapse_newlines_var
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         ttk.Label(self.setting_box, text="Output").grid(row=1, column=0, sticky="w", pady=(6, 0))
         ttk.Combobox(
@@ -329,7 +335,7 @@ class TranslatorApp:
         self.output_menu.tk_popup(event.x_root, event.y_root)
 
     def translate_input(self):
-        text = self.input_text.get("1.0", "end").strip()
+        text = self._normalize_text(self.input_text.get("1.0", "end")).strip()
         if not text:
             self.status_var.set("Nothing to translate.")
             return
@@ -449,10 +455,32 @@ class TranslatorApp:
             self.translate_button.configure(state="normal")
             self.stop_button.configure(state="disabled")
 
+    def _normalize_text(self, text: str) -> str:
+        if not text:
+            return text
+        normalized = (
+            text.replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .replace("\u2028", "\n")
+            .replace("\u2029", "\n")
+            .replace("\u0085", "\n")
+            .replace("\u00a0", " ")
+        )
+        return normalized
+
+    def _normalize_output_text(self, text: str) -> str:
+        normalized = self._normalize_text(text)
+        if self.collapse_newlines_var.get():
+            return re.sub(r"\n{3,}", "\n\n", normalized)
+        return normalized
+
     def _set_output(self, text: str, status: Optional[str] = "Done."):
+        text = self._normalize_output_text(text)
         self.output_text.configure(state="normal")
         self.output_text.delete("1.0", "end")
         self.output_text.insert("1.0", text)
+        self.output_text.tag_configure("compact", spacing1=0, spacing2=0, spacing3=0)
+        self.output_text.tag_add("compact", "1.0", "end")
         self.output_text.see("end")
         self.output_text.configure(state="disabled")
         if status is not None:
@@ -511,6 +539,7 @@ class TranslatorApp:
             self.target_lang_var,
             self.output_mode_var,
             self.use_context_var,
+            self.collapse_newlines_var,
             self.layout_var,
             self.mode_var,
             self.host_var,
@@ -535,6 +564,7 @@ class TranslatorApp:
         self.output_mode_var.set(data.get("output_mode", self.output_mode_var.get()))
         self.layout_var.set(data.get("layout", self.layout_var.get()))
         self.use_context_var.set(bool(data.get("use_context", self.use_context_var.get())))
+        self.collapse_newlines_var.set(bool(data.get("collapse_newlines", self.collapse_newlines_var.get())))
         self.mode_var.set(data.get("mode", self.mode_var.get()))
         self.host_var.set(data.get("host", self.host_var.get()))
         self.model_var.set(data.get("model", self.model_var.get()))
@@ -551,6 +581,7 @@ class TranslatorApp:
             "output_mode": self.output_mode_var.get(),
             "layout": self.layout_var.get(),
             "use_context": self.use_context_var.get(),
+            "collapse_newlines": self.collapse_newlines_var.get(),
             "mode": self.mode_var.get(),
             "host": self.host_var.get(),
             "model": self.model_var.get(),
@@ -570,11 +601,28 @@ class TranslatorApp:
         self.panes.pack(fill="both", expand=True)
 
         input_box = ttk.LabelFrame(self.panes, text="Input", padding=8)
-        self.input_text = ScrolledText(input_box, height=10, wrap="word", font=self._font)
+        self.input_text = ScrolledText(
+            input_box,
+            height=10,
+            wrap="word",
+            font=self._font,
+            spacing1=0,
+            spacing2=0,
+            spacing3=0,
+        )
         self.input_text.pack(fill="both", expand=True)
 
         output_box = ttk.LabelFrame(self.panes, text="Output", padding=8)
-        self.output_text = ScrolledText(output_box, height=10, wrap="word", state="disabled", font=self._font)
+        self.output_text = ScrolledText(
+            output_box,
+            height=10,
+            wrap="word",
+            state="disabled",
+            font=self._font,
+            spacing1=0,
+            spacing2=0,
+            spacing3=0,
+        )
         self.output_text.pack(fill="both", expand=True)
 
         self.panes.add(input_box, weight=1)

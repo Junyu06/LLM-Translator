@@ -199,15 +199,22 @@ def join_translations(pairs: List[AlignedPair], join_with: str = "\n") -> str:
 
 def join_interleaved(pairs: List[AlignedPair], join_with: str = "\n") -> str:
     parts = []
-    for p in pairs:
+    total = len(pairs)
+    for i, p in enumerate(pairs):
         src = p.source
         tgt = p.target
         if not src.strip() and not tgt.strip():
-            parts.append(("", False))
+            parts.append(("", True))
             continue
         parts.append((src, False))
         parts.append((tgt, False))
-        parts.append(("", True))  # blank line between source/target pairs
+        add_sep = True
+        if i + 1 < total:
+            nxt = pairs[i + 1]
+            if not nxt.source.strip() and not nxt.target.strip():
+                add_sep = False
+        if add_sep:
+            parts.append(("", True))  # blank line between source/target pairs
     if parts and parts[-1][1]:
         parts.pop()
     return join_with.join(text for text, _ in parts)
