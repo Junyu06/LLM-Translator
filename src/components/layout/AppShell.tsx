@@ -2,11 +2,12 @@ import type { ReactNode } from "react";
 
 type AppShellProps = {
   topBar: ReactNode;
+  sidebar?: ReactNode;
   statusBar: ReactNode;
   children: ReactNode;
 };
 
-export function AppShell({ topBar, statusBar, children }: AppShellProps) {
+export function AppShell({ topBar, sidebar, statusBar, children }: AppShellProps) {
   return (
     <main className="shell">
       <header className="masthead">
@@ -14,7 +15,10 @@ export function AppShell({ topBar, statusBar, children }: AppShellProps) {
         {statusBar}
       </header>
 
-      <section className="workspace">{children}</section>
+      <section className="workspace">
+        {sidebar}
+        {children}
+      </section>
     </main>
   );
 }

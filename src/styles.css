@@ -163,9 +163,63 @@ body {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
+  grid-template-columns: 240px minmax(0, 1.05fr) minmax(360px, 0.95fr);
   gap: 20px;
   align-items: start;
+}
+
+.sidebar {
+  min-height: calc(100vh - 180px);
+  gap: 18px;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-header,
+.page-header-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sidebar-header h2,
+.placeholder-page h2 {
+  font-family: "Iowan Old Style", "Georgia", serif;
+  margin: 0;
+  font-size: 1.55rem;
+  line-height: 1.05;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar-link {
+  border: 1px solid transparent;
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-link.active {
+  border-color: var(--line);
+  background: rgba(255, 250, 244, 0.9);
+}
+
+.page-card {
+  min-height: calc(100vh - 180px);
+}
+
+.placeholder-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  justify-content: flex-start;
 }
 
 .controls,
@@ -362,7 +416,9 @@ pre {
   }
 
   .controls,
-  .output {
+  .output,
+  .sidebar,
+  .page-card {
     min-height: auto;
   }
 }
