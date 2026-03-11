@@ -65,9 +65,55 @@ def cmd_translate_stream() -> int:
     return 0
 
 
+def cmd_ocr_clipboard() -> int:
+    if sys.platform == "darwin":
+        from ui_mac.ocr import get_paste_image_paths, get_paste_images, run_ocr, run_ocr_images
+
+        paths = get_paste_image_paths()
+        if paths:
+            write_json({"text": run_ocr(paths)})
+            return 0
+
+        images = get_paste_images()
+        if images:
+            write_json({"text": run_ocr_images(images)})
+            return 0
+
+        raise RuntimeError("No image found in clipboard.")
+
+    if sys.platform.startswith("win"):
+        from ui_windows.ocr import (
+            get_paste_image_paths,
+            get_paste_images,
+            is_ocr_available,
+            run_ocr,
+            run_ocr_images,
+        )
+
+        if not is_ocr_available():
+            raise RuntimeError("WinRT OCR is not available. Install winsdk and pillow.")
+
+        paths = get_paste_image_paths()
+        if paths:
+            write_json({"text": run_ocr(paths)})
+            return 0
+
+        images = get_paste_images()
+        if images:
+            write_json({"text": run_ocr_images(images)})
+            return 0
+
+        raise RuntimeError("No image found in clipboard.")
+
+    raise RuntimeError("Clipboard OCR is implemented only for macOS and Windows.")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bridge Python services into Tauri commands")
-    parser.add_argument("command", choices=["health", "get-config", "save-config", "translate", "translate-stream"])
+    parser.add_argument(
+        "command",
+        choices=["health", "get-config", "save-config", "translate", "translate-stream", "ocr-clipboard"],
+    )
     args = parser.parse_args()
 
     try:
@@ -81,6 +127,8 @@ def main() -> int:
             return cmd_translate()
         if args.command == "translate-stream":
             return cmd_translate_stream()
+        if args.command == "ocr-clipboard":
+            return cmd_ocr_clipboard()
     except Exception as exc:
         error_payload = {
             "error": str(exc),

@@ -1,9 +1,10 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { ClipboardEvent, FormEvent, useEffect, useRef, useState } from "react";
 
 import {
   cancelTranslation,
   isTauriRuntime,
   readClipboardText,
+  runClipboardOcr,
   saveConfig,
   showMainWindow,
   startTranslationStream,
@@ -18,7 +19,7 @@ import "./styles.css";
 
 declare global {
   interface Window {
-    __translatorTriggerClipboardTranslation?: () => void;
+    __translatorTriggerClipboardTranslation?: (text?: string) => void;
   }
 }
 
@@ -139,6 +140,7 @@ export default function App() {
   const firstProgressTimeoutRef = useRef<number | null>(null);
   const translationListenersReadyRef = useRef<Promise<void>>(Promise.resolve());
   const resolveTranslationListenersReadyRef = useRef<(() => void) | null>(null);
+  const translateClipboardRef = useRef<(text?: string) => void>(() => undefined);
 
   useEffect(() => {
     void waitForBackend()
@@ -390,19 +392,6 @@ export default function App() {
     };
   }, [isBackendReady]);
 
-  useEffect(() => {
-    window.__translatorTriggerClipboardTranslation = () => {
-      console.log("frontend: invoked clipboard translation bridge");
-      setStatus("Hotkey received. Reading clipboard...");
-      void handleTranslateClipboard();
-    };
-
-    return () => {
-      // Keep the function stable across re-mounts/HMR whenever possible.
-      window.__translatorTriggerClipboardTranslation = undefined;
-    };
-  }, []);
-
   function buildRequest(text: string): TranslationRequest {
     const activeConfig = configRef.current;
     return {
@@ -501,14 +490,15 @@ export default function App() {
     }
   }
 
-  async function handleTranslateClipboard() {
+  async function handleTranslateClipboard(providedText?: string) {
     if (!isBackendReady) {
       setStatus("Backend is still starting.");
       return;
     }
 
     try {
-      const clipboardText = await readClipboardTextWithRetry();
+      const clipboardText =
+        typeof providedText === "string" ? providedText : await readClipboardTextWithRetry();
       console.log("translate-clipboard: length=", clipboardText.length, "preview=", clipboardText.slice(0, 120));
       if (!clipboardText.trim()) {
         setStatus("Clipboard is empty.");
@@ -520,6 +510,54 @@ export default function App() {
       setStatus(error instanceof Error ? error.message : "Clipboard read failed.");
     }
   }
+
+  async function handleOcrClipboardImage() {
+    if (!isBackendReady) {
+      setStatus("Backend is still starting.");
+      return;
+    }
+
+    try {
+      setStatus("Running OCR on clipboard image...");
+      const text = await runClipboardOcr();
+      if (!text.trim()) {
+        setStatus("OCR found no text.");
+        return;
+      }
+      setInput(text);
+      setStatus("OCR pasted into input.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Clipboard OCR failed.");
+    }
+  }
+
+  function handleInputPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const hasImage = Array.from(event.clipboardData.items).some((item) => item.type.startsWith("image/"));
+    if (!hasImage) {
+      return;
+    }
+    event.preventDefault();
+    void handleOcrClipboardImage();
+  }
+
+  useEffect(() => {
+    translateClipboardRef.current = (text?: string) => {
+      console.log("frontend: invoked clipboard translation bridge");
+      setStatus(typeof text === "string" ? "Hotkey received. Translating clipboard..." : "Hotkey received. Reading clipboard...");
+      void handleTranslateClipboard(text);
+    };
+  });
+
+  useEffect(() => {
+    window.__translatorTriggerClipboardTranslation = (text?: string) => {
+      translateClipboardRef.current(text);
+    };
+
+    return () => {
+      // Keep the function stable across re-mounts/HMR whenever possible.
+      window.__translatorTriggerClipboardTranslation = undefined;
+    };
+  }, []);
 
   async function handleCopyOutput() {
     if (!output.trim()) {
@@ -730,7 +768,12 @@ export default function App() {
 
           <label className="field">
             <span className="field-label">Input</span>
-            <textarea value={input} onChange={(event) => setInput(event.target.value)} rows={12} />
+            <textarea
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onPaste={handleInputPaste}
+              rows={12}
+            />
           </label>
 
           <div className="actions">
@@ -749,13 +792,21 @@ export default function App() {
               <button
                 className="ghost action-button"
                 type="button"
+                disabled={isSubmitting || !isBackendReady}
+                onClick={() => void handleOcrClipboardImage()}
+              >
+                OCR clipboard image
+              </button>
+              <button
+                className="ghost action-button"
+                type="button"
                 disabled={!isSubmitting}
                 onClick={() => void handleStop()}
               >
                 Stop
               </button>
             </div>
-            <span className="helper-text">Status now reports active segment, completed count, and whether the current segment is still streaming.</span>
+            <span className="helper-text">Paste text normally. If the clipboard holds an image, paste into Input or use OCR clipboard image to extract text first.</span>
           </div>
         </form>
 

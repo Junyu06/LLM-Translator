@@ -197,7 +197,7 @@ fn hotkey_enabled() -> bool {
 
 fn read_clipboard_text_impl() -> Result<String, String> {
     if cfg!(target_os = "macos") {
-        let output = Command::new("pbpaste")
+        let output = Command::new("/usr/bin/pbpaste")
             .output()
             .map_err(|error| format!("Failed to read clipboard via pbpaste: {error}"))?;
         if output.status.success() {
@@ -234,7 +234,7 @@ fn read_clipboard_text_impl() -> Result<String, String> {
 
 fn write_clipboard_text_impl(payload: &str) -> Result<(), String> {
     if cfg!(target_os = "macos") {
-        let mut child = Command::new("pbcopy")
+        let mut child = Command::new("/usr/bin/pbcopy")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -304,10 +304,14 @@ pub(crate) fn emit_clipboard_translation_request(app: &AppHandle) -> Result<(), 
         return Ok(());
     }
 
-    show_main_window(app)?;
     let window = main_window(app)?;
 
-    // Webview can be briefly unavailable right after showing/restoring. Retry eval a few times.
+    // Let the source app finish the second Cmd+C and update the clipboard before we steal focus.
+    std::thread::sleep(std::time::Duration::from_millis(140));
+    let clipboard_text = read_clipboard_text_impl().ok();
+
+    // Hidden windows can still accept eval, so delay bringing the app forward until after the frontend
+    // has started reading the clipboard.
     let mut last_error: Option<String> = None;
     for attempt in 1..=6 {
         let delay_ms = match attempt {
@@ -322,19 +326,39 @@ pub(crate) fn emit_clipboard_translation_request(app: &AppHandle) -> Result<(), 
             std::thread::sleep(std::time::Duration::from_millis(delay_ms));
         }
 
-        let script = r#"
-          try {
-            const ok = typeof window.__translatorTriggerClipboardTranslation === 'function';
-            console.log('[translator] hotkey eval attempt: bridge=', ok);
-            if (ok) window.__translatorTriggerClipboardTranslation();
-          } catch (e) {
-            console.log('[translator] hotkey eval error', e);
-          }
-        "#;
+        let payload = clipboard_text
+            .as_ref()
+            .map(|text| serde_json::to_string(text))
+            .transpose()
+            .map_err(|error| format!("Failed to serialize clipboard text: {error}"))?;
+        let script = match payload {
+            Some(text) => format!(
+                r#"
+                  try {{
+                    const ok = typeof window.__translatorTriggerClipboardTranslation === 'function';
+                    console.log('[translator] hotkey eval attempt: bridge=', ok);
+                    if (ok) window.__translatorTriggerClipboardTranslation({text});
+                  }} catch (e) {{
+                    console.log('[translator] hotkey eval error', e);
+                  }}
+                "#
+            ),
+            None => r#"
+                  try {
+                    const ok = typeof window.__translatorTriggerClipboardTranslation === 'function';
+                    console.log('[translator] hotkey eval attempt: bridge=', ok);
+                    if (ok) window.__translatorTriggerClipboardTranslation();
+                  } catch (e) {
+                    console.log('[translator] hotkey eval error', e);
+                  }
+                "#
+            .to_string(),
+        };
 
-        match window.eval(script) {
+        match window.eval(&script) {
             Ok(()) => {
                 eprintln!("main: clipboard trigger eval sent (attempt={attempt})");
+                show_main_window(app)?;
                 return Ok(());
             }
             Err(error) => {
@@ -728,6 +752,11 @@ fn write_clipboard_text(payload: String) -> Result<(), String> {
     write_clipboard_text_impl(&payload)
 }
 
+#[tauri::command]
+fn run_clipboard_ocr() -> Result<String, String> {
+    run_bridge("ocr-clipboard", None)
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(AppState {
@@ -814,6 +843,7 @@ fn main() {
             show_main_window_command,
             read_clipboard_text,
             write_clipboard_text,
+            run_clipboard_ocr,
             frontend_ready
         ])
         .run(tauri::generate_context!())

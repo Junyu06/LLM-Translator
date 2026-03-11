@@ -72,6 +72,7 @@ impl MacHotkeyListener {
                                     "hotkey_macos: failed to request clipboard translation: {error}"
                                 );
                             }
+                            return CallbackResult::Drop;
                         }
                         _ => {
                             *guard = Some(now);

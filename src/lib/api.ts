@@ -8,6 +8,10 @@ export type DesktopBackendStatus = {
   error: string | null;
 };
 
+type OcrResponse = {
+  text: string;
+};
+
 type BridgeError = {
   error?: string;
   command?: string;
@@ -180,6 +184,14 @@ export async function writeClipboardText(text: string): Promise<void> {
   }
 
   throw new Error("Clipboard write is not available in this runtime.");
+}
+
+export async function runClipboardOcr(): Promise<string> {
+  if (!isTauriRuntime()) {
+    throw new Error("Clipboard OCR is only available in the Tauri runtime.");
+  }
+  const result = await invokeJson<OcrResponse>("run_clipboard_ocr");
+  return result.text;
 }
 
 function sleep(ms: number) {
