@@ -14,6 +14,9 @@ import {
   waitForBackend,
   writeClipboardText
 } from "./lib/api";
+import { AppShell } from "./components/layout/AppShell";
+import { StatusBar } from "./components/layout/StatusBar";
+import { TopBar } from "./components/layout/TopBar";
 import type { AppConfig, TranslationRequest, TranslationResponse } from "./types";
 import "./styles.css";
 
@@ -608,13 +611,9 @@ export default function App() {
       : 0;
 
   return (
-    <main className="shell">
-      <header className="masthead">
-        <div className="title-block">
-          <div>
-            <p className="eyebrow">Local Desktop Translator</p>
-            <h1>Single UI, Python brain, Tauri shell</h1>
-          </div>
+    <AppShell
+      topBar={
+        <TopBar eyebrow="Local Desktop Translator" title="Single UI, Python brain, Tauri shell">
           <div className="progress-board">
             <div className="progress-stats">
               <span>{progress.activeSegmentIndex ? `Segment ${progress.activeSegmentIndex}` : "Waiting"}</span>
@@ -631,11 +630,10 @@ export default function App() {
               <p>{compactPreview(progress.activeSegmentTarget, "Target text will stream here.")}</p>
             </div>
           </div>
-        </div>
-        <div className={`status-pill ${isBackendReady ? "ready" : "pending"}`}>{status}</div>
-      </header>
-
-      <section className="workspace">
+        </TopBar>
+      }
+      statusBar={<StatusBar status={status} isReady={isBackendReady} />}
+    >
         <form className="panel controls" onSubmit={handleSubmit}>
           <div className="panel-heading">
             <div>
@@ -829,7 +827,6 @@ export default function App() {
           </div>
           <pre>{output || "Translation result will appear here, segment by segment."}</pre>
         </section>
-      </section>
-    </main>
+    </AppShell>
   );
 }
