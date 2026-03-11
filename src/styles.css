@@ -49,6 +49,65 @@ body {
   margin-bottom: 18px;
 }
 
+.title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.progress-board {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: min(72ch, 100%);
+}
+
+.progress-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.progress-rail {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(27, 23, 18, 0.09);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #c15d22, #e69b47);
+  transition: width 160ms ease-out;
+}
+
+.segment-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 250, 244, 0.84);
+}
+
+.segment-card p {
+  margin: 0;
+}
+
+.segment-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -251,6 +310,17 @@ textarea {
   gap: 14px;
 }
 
+.action-row,
+.output-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.action-button {
+  min-width: 0;
+}
+
 .output-header {
   display: flex;
   justify-content: space-between;
@@ -279,6 +349,10 @@ pre {
   .masthead {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .progress-board {
+    max-width: 100%;
   }
 
   .grid,
@@ -312,7 +386,10 @@ pre {
 
   .actions,
   .panel-heading,
-  .output-header {
+  .output-header,
+  .action-row,
+  .output-tools,
+  .progress-stats {
     flex-direction: column;
     align-items: stretch;
   }

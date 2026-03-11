@@ -11,9 +11,9 @@ class TranslationServiceTests(unittest.TestCase):
     @patch("python_backend.services.translation_service.OllamaBackend")
     def test_translate_returns_rendered_output(self, backend_cls):
         backend = backend_cls.return_value
-        backend.generate.side_effect = [
-            "译文：Hello",
-            "译文：World",
+        backend.stream_generate.side_effect = [
+            iter(["译文：Hello"]),
+            iter(["译文：World"]),
         ]
 
         service = TranslationService()
@@ -33,7 +33,7 @@ class TranslationServiceTests(unittest.TestCase):
     @patch("python_backend.services.translation_service.OllamaBackend")
     def test_translate_collapse_newlines(self, backend_cls):
         backend = backend_cls.return_value
-        backend.generate.return_value = "译文：A"
+        backend.stream_generate.return_value = iter(["译文：A"])
 
         service = TranslationService()
         response = service.translate(

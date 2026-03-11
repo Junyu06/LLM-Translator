@@ -113,7 +113,7 @@ Notes:
 
 ## React + Python + Tauri Migration Baseline
 
-This repository now includes the first migration baseline described in [react_python_tauri_plan.md](/Users/teriri/WIP_CODE/GitHub/Translator/react_python_tauri_plan.md):
+This repository now includes the React + Tauri migration baseline described in [react_python_tauri_plan.md](/Users/teriri/WIP_CODE/GitHub/Translator/react_python_tauri_plan.md), plus the first slice of Phase 3 native shell work:
 
 - `python_backend/`
   - Tk-independent translation service
@@ -121,7 +121,9 @@ This repository now includes the first migration baseline described in [react_py
 - `src/`
   - shared React UI shell wired to the Python API contract
 - `src-tauri/`
-  - minimal Tauri desktop shell that starts the Python backend in development
+  - Tauri desktop shell with Python bridge commands
+  - system tray menu with reopen / translate clipboard / quit
+  - close-to-tray behavior driven by persisted config
 
 ### Backend API
 
@@ -138,7 +140,7 @@ Endpoints:
 - `PUT /config`
 - `POST /translate`
 
-`POST /ocr` is reserved for the later native parity phase.
+`POST /ocr` is still reserved for the later native parity phase.
 
 ### Frontend Shell
 
@@ -166,4 +168,4 @@ Then run:
 npm run tauri:dev
 ```
 
-This is currently a migration baseline, not full feature parity with the Tk apps. Global hotkey, tray, clipboard image OCR, and packaged Python bundling still belong to later phases.
+This is still not full feature parity with the Tk apps. Tray behavior and clipboard translation are now present in the new shell, while global hotkey wiring, clipboard image OCR, and packaged Python bundling still belong to later phases.

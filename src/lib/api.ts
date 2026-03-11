@@ -51,6 +51,20 @@ async function invokeJson<T>(command: string, payload?: unknown): Promise<T> {
   }
 }
 
+async function invokeRaw<T>(command: string, payload?: unknown): Promise<T> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<T>(command, payload ? { payload: JSON.stringify(payload) } : {});
+}
+
+async function invokeVoid(command: string, payload?: unknown): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  if (payload === undefined) {
+    await invoke(command);
+    return;
+  }
+  await invoke(command, { payload });
+}
+
 export async function getHealth(): Promise<{ status: string }> {
   if (isTauriRuntime()) {
     const desktopStatus = await getDesktopBackendStatus();
@@ -89,7 +103,34 @@ export async function translate(payload: TranslationRequest): Promise<Translatio
   });
 }
 
-function isTauriRuntime() {
+export async function startTranslationStream(payload: TranslationRequest): Promise<number> {
+  if (!isTauriRuntime()) {
+    throw new Error("Streaming translation is only available in the Tauri runtime.");
+  }
+  return invokeRaw<number>("start_translation_stream", payload);
+}
+
+export async function takeTranslationEvents<T>(jobId: number): Promise<T[]> {
+  if (!isTauriRuntime()) {
+    return [];
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<T[]>("take_translation_events", {
+    jobId
+  });
+}
+
+export async function cancelTranslation(jobId?: number | null): Promise<boolean> {
+  if (!isTauriRuntime()) {
+    return false;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<boolean>("cancel_translation", {
+    jobId: jobId ?? null
+  });
+}
+
+export function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
@@ -99,6 +140,46 @@ export async function getDesktopBackendStatus(): Promise<DesktopBackendStatus | 
   }
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<DesktopBackendStatus>("backend_status");
+}
+
+export async function showMainWindow(): Promise<void> {
+  if (!isTauriRuntime()) {
+    return;
+  }
+  await invokeVoid("show_main_window_command");
+}
+
+export async function syncHotkeyListener(): Promise<void> {
+  if (!isTauriRuntime()) {
+    return;
+  }
+  await invokeVoid("sync_hotkey_listener");
+}
+
+export async function readClipboardText(): Promise<string> {
+  if (isTauriRuntime()) {
+    return invokeRaw<string>("read_clipboard_text");
+  }
+
+  if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
+    return navigator.clipboard.readText();
+  }
+
+  throw new Error("Clipboard read is not available in this runtime.");
+}
+
+export async function writeClipboardText(text: string): Promise<void> {
+  if (isTauriRuntime()) {
+    await invokeVoid("write_clipboard_text", text);
+    return;
+  }
+
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  throw new Error("Clipboard write is not available in this runtime.");
 }
 
 function sleep(ms: number) {

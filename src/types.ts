@@ -8,6 +8,9 @@ export type AppConfig = {
   mode: "local" | "http";
   host: string;
   model: string;
+  font_size: number;
+  hotkey_enabled: boolean;
+  minimize_to_tray: boolean;
 };
 
 export type TranslationRequest = {
@@ -27,4 +30,3 @@ export type TranslationResponse = {
   detected_source_lang: string | null;
   segments: Array<{ source: string; target: string }>;
 };
-
