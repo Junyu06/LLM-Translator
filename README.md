@@ -108,3 +108,62 @@ Notes:
 - Improved long-text segmentation and context control
 - Glossary / terminology control
 - Further backend abstraction to support alternative inference engines
+
+---
+
+## React + Python + Tauri Migration Baseline
+
+This repository now includes the first migration baseline described in [react_python_tauri_plan.md](/Users/teriri/WIP_CODE/GitHub/Translator/react_python_tauri_plan.md):
+
+- `python_backend/`
+  - Tk-independent translation service
+  - local HTTP API for `/health`, `/config`, `/translate`
+- `src/`
+  - shared React UI shell wired to the Python API contract
+- `src-tauri/`
+  - minimal Tauri desktop shell that starts the Python backend in development
+
+### Backend API
+
+Run the extracted Python API locally:
+
+```bash
+python3 python_backend/api_server.py
+```
+
+Endpoints:
+
+- `GET /health`
+- `GET /config`
+- `PUT /config`
+- `POST /translate`
+
+`POST /ocr` is reserved for the later native parity phase.
+
+### Frontend Shell
+
+Install dependencies and run the shared frontend:
+
+```bash
+npm install
+npm run dev
+```
+
+### Tauri Shell
+
+Tauri requires a Rust toolchain. Verify `cargo --version` and `rustc --version` first.
+
+If they are missing on macOS, install Rust with:
+
+```bash
+curl https://sh.rustup.rs -sSf | sh
+source "$HOME/.cargo/env"
+```
+
+Then run:
+
+```bash
+npm run tauri:dev
+```
+
+This is currently a migration baseline, not full feature parity with the Tk apps. Global hotkey, tray, clipboard image OCR, and packaged Python bundling still belong to later phases.

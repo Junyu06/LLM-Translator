@@ -1,0 +1,1051 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Translator Repo Interactive Flow</title>
+  <style>
+    :root {
+      --bg: #f5efe4;
+      --bg-accent: #efe0c4;
+      --panel: rgba(255, 252, 246, 0.82);
+      --panel-strong: rgba(255, 248, 236, 0.96);
+      --line: rgba(68, 53, 34, 0.14);
+      --ink: #2c2419;
+      --muted: #6a5a46;
+      --hot: #d95d39;
+      --warm: #f0a74a;
+      --teal: #186b6d;
+      --shadow: 0 24px 80px rgba(94, 67, 25, 0.14);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 14px;
+      --transition: 220ms ease;
+      --code: "SFMono-Regular", "Menlo", monospace;
+      --display: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--display);
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(217, 93, 57, 0.16), transparent 24%),
+        radial-gradient(circle at 90% 10%, rgba(24, 107, 109, 0.18), transparent 22%),
+        linear-gradient(135deg, var(--bg), #faf6ee 46%, var(--bg-accent));
+      overflow-x: hidden;
+    }
+
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      inset: auto;
+      border-radius: 999px;
+      pointer-events: none;
+      filter: blur(14px);
+      opacity: 0.45;
+    }
+
+    body::before {
+      width: 320px;
+      height: 320px;
+      top: -120px;
+      right: -80px;
+      background: rgba(240, 167, 74, 0.24);
+      animation: drift 18s ease-in-out infinite;
+    }
+
+    body::after {
+      width: 280px;
+      height: 280px;
+      bottom: -80px;
+      left: -100px;
+      background: rgba(24, 107, 109, 0.22);
+      animation: drift 22s ease-in-out infinite reverse;
+    }
+
+    @keyframes drift {
+      0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+      50% { transform: translate3d(20px, -30px, 0) scale(1.08); }
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); box-shadow: 0 0 0 rgba(217, 93, 57, 0); }
+      50% { transform: scale(1.02); box-shadow: 0 12px 24px rgba(217, 93, 57, 0.18); }
+    }
+
+    @keyframes stream {
+      from { background-position: 0 0; }
+      to { background-position: 160px 0; }
+    }
+
+    .page {
+      width: min(1200px, calc(100% - 32px));
+      margin: 32px auto 48px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .hero,
+    .panel {
+      background: var(--panel);
+      backdrop-filter: blur(18px);
+      border: 1px solid rgba(255, 255, 255, 0.45);
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 28px;
+      border-radius: var(--radius-xl);
+      display: grid;
+      gap: 18px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      width: fit-content;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      color: var(--teal);
+      background: rgba(24, 107, 109, 0.1);
+      font-size: 13px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(2rem, 4vw, 3.5rem);
+      line-height: 0.95;
+      letter-spacing: -0.05em;
+      max-width: 12ch;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 70ch;
+      color: var(--muted);
+      line-height: 1.65;
+      font-size: 15px;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .panel {
+      border-radius: var(--radius-lg);
+      padding: 20px;
+    }
+
+    .controls {
+      display: grid;
+      gap: 16px;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      background: var(--ink);
+      color: #fff9ef;
+      padding: 10px 16px;
+      font: inherit;
+      cursor: pointer;
+      transition: transform var(--transition), opacity var(--transition), background var(--transition);
+    }
+
+    button.secondary {
+      background: rgba(44, 36, 25, 0.1);
+      color: var(--ink);
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+    }
+
+    .toggles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: 999px;
+      background: rgba(255, 248, 236, 0.85);
+      border: 1px solid var(--line);
+      color: var(--ink);
+      cursor: pointer;
+      user-select: none;
+      transition: border-color var(--transition), transform var(--transition), background var(--transition);
+    }
+
+    .chip:hover {
+      transform: translateY(-1px);
+    }
+
+    .chip input {
+      accent-color: var(--hot);
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      padding: 14px;
+      border-radius: var(--radius-md);
+      background: rgba(255, 250, 241, 0.9);
+      border: 1px solid var(--line);
+    }
+
+    .metric span {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .metric strong {
+      font-size: 22px;
+      letter-spacing: -0.04em;
+    }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 18px;
+    }
+
+    .timeline {
+      position: relative;
+      display: grid;
+      gap: 12px;
+      padding-top: 12px;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 17px;
+      width: 4px;
+      height: 100%;
+      background: linear-gradient(180deg, rgba(217, 93, 57, 0.15), rgba(24, 107, 109, 0.22));
+      border-radius: 999px;
+    }
+
+    .step-card {
+      position: relative;
+      margin-left: 42px;
+      padding: 16px 18px;
+      border-radius: var(--radius-md);
+      background: var(--panel-strong);
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition);
+    }
+
+    .step-card::before {
+      content: "";
+      position: absolute;
+      top: 22px;
+      left: -34px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #fff4e3;
+      border: 4px solid rgba(217, 93, 57, 0.22);
+      box-shadow: 0 0 0 6px rgba(255, 250, 244, 0.8);
+      z-index: 1;
+    }
+
+    .step-card.active {
+      border-color: rgba(217, 93, 57, 0.34);
+      box-shadow: 0 18px 34px rgba(109, 65, 24, 0.12);
+      animation: pulse 1.7s ease-in-out infinite;
+    }
+
+    .step-card.optional {
+      opacity: 0.56;
+      filter: saturate(0.72);
+    }
+
+    .step-card.active.optional {
+      opacity: 1;
+    }
+
+    .step-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      margin-bottom: 8px;
+    }
+
+    .step-index {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--hot);
+    }
+
+    .step-title {
+      font-size: 20px;
+      letter-spacing: -0.03em;
+      margin: 0;
+    }
+
+    .step-file {
+      font-family: var(--code);
+      font-size: 12px;
+      color: var(--teal);
+      background: rgba(24, 107, 109, 0.08);
+      padding: 4px 8px;
+      border-radius: 999px;
+      width: fit-content;
+      margin-bottom: 10px;
+    }
+
+    .step-desc {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 14px;
+    }
+
+    .stream-bar {
+      position: relative;
+      margin-top: 12px;
+      height: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(44, 36, 25, 0.08);
+    }
+
+    .stream-bar::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(217, 93, 57, 0.8), rgba(240, 167, 74, 0.85), transparent);
+      background-size: 160px 100%;
+      animation: stream 1.8s linear infinite;
+      opacity: 0;
+      transition: opacity var(--transition);
+    }
+
+    .step-card.active .stream-bar::after {
+      opacity: 1;
+    }
+
+    .detail-card {
+      display: grid;
+      gap: 16px;
+    }
+
+    .detail-card h2,
+    .diagram h2 {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: -0.03em;
+    }
+
+    .detail-card p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.65;
+    }
+
+    .codebox {
+      margin: 0;
+      padding: 16px;
+      border-radius: var(--radius-md);
+      background: #241c12;
+      color: #f8ecda;
+      font-family: var(--code);
+      font-size: 13px;
+      line-height: 1.6;
+      overflow-x: auto;
+    }
+
+    .diagram-wrap {
+      min-height: clamp(420px, 62vh, 860px);
+      display: grid;
+      gap: 12px;
+      padding: 12px;
+      border-radius: var(--radius-md);
+      background:
+        linear-gradient(180deg, rgba(255, 250, 243, 0.82), rgba(255, 245, 231, 0.94));
+      border: 1px solid var(--line);
+    }
+
+    .diagram-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .zoom-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .zoom-button {
+      min-width: 42px;
+      padding: 8px 12px;
+    }
+
+    .zoom-label {
+      min-width: 56px;
+      text-align: center;
+      font-family: var(--code);
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .diagram-hint {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .diagram-viewport {
+      position: relative;
+      min-height: 0;
+      height: 100%;
+      overflow: auto;
+      border-radius: var(--radius-md);
+      border: 1px solid rgba(68, 53, 34, 0.1);
+      background:
+        linear-gradient(90deg, rgba(255,255,255,0.32) 1px, transparent 1px),
+        linear-gradient(rgba(255,255,255,0.26) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(255, 250, 243, 0.92), rgba(255, 247, 237, 0.98));
+      background-size: 24px 24px, 24px 24px, 100% 100%;
+      cursor: grab;
+    }
+
+    .diagram-viewport.dragging {
+      cursor: grabbing;
+    }
+
+    .diagram-stage {
+      position: relative;
+      min-width: 100%;
+      min-height: 100%;
+      padding: 24px;
+    }
+
+    .diagram-canvas {
+      transform-origin: top left;
+      will-change: transform;
+    }
+
+    .diagram-canvas svg {
+      display: block;
+      max-width: none;
+      height: auto;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255, 248, 236, 0.9);
+      border: 1px solid var(--line);
+    }
+
+    .swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+
+    .repo-note {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    @media (max-width: 980px) {
+      .hero-grid,
+      .main-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .status-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .page {
+        width: min(100% - 20px, 100%);
+        margin: 18px auto 28px;
+      }
+
+      .hero,
+      .panel {
+        padding: 16px;
+      }
+
+      .step-card {
+        margin-left: 34px;
+      }
+
+      .timeline::before {
+        left: 12px;
+      }
+
+      .step-card::before {
+        left: -28px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <span class="eyebrow">Translator Repo Flow</span>
+      <div class="hero-grid">
+        <div>
+          <h1>本地翻译链路的交互式动画</h1>
+          <p>
+            这个页面基于仓库中的真实代码路径构建：从双击复制或粘贴触发，到 OCR、分段、提示词组装、Ollama 推理、后处理，再到 UI 输出。
+            右侧流程图使用 Mermaid 语法动态生成，左侧时间线和详情卡片会随步骤联动。
+          </p>
+        </div>
+        <div class="panel controls">
+          <div class="toolbar">
+            <button id="playButton">自动播放</button>
+            <button id="prevButton" class="secondary">上一步</button>
+            <button id="nextButton" class="secondary">下一步</button>
+            <button id="resetButton" class="secondary">重置</button>
+          </div>
+          <div class="toggles">
+            <label class="chip">
+              <input id="ocrToggle" type="checkbox">
+              启用 OCR 分支
+            </label>
+            <label class="chip">
+              <input id="contextToggle" type="checkbox" checked>
+              启用 Context 分段
+            </label>
+          </div>
+          <div class="status-grid">
+            <div class="metric">
+              <span>当前阶段</span>
+              <strong id="metricStep">01</strong>
+            </div>
+            <div class="metric">
+              <span>运行模式</span>
+              <strong id="metricMode">Context</strong>
+            </div>
+            <div class="metric">
+              <span>输入通道</span>
+              <strong id="metricInput">文本</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="main-grid">
+      <div class="panel">
+        <div class="timeline" id="timeline"></div>
+      </div>
+
+      <div class="panel detail-card">
+        <div>
+          <h2 id="detailTitle"></h2>
+          <p id="detailText"></p>
+        </div>
+        <pre class="codebox" id="detailCode"></pre>
+        <div class="repo-note" id="detailNote"></div>
+      </div>
+    </section>
+
+    <section class="panel diagram">
+      <h2>Mermaid 流程图</h2>
+      <div class="legend">
+        <span><i class="swatch" style="background:#d95d39"></i>当前激活节点</span>
+        <span><i class="swatch" style="background:#186b6d"></i>核心处理节点</span>
+        <span><i class="swatch" style="background:#d4c0a6"></i>可选分支或次级节点</span>
+      </div>
+      <div class="diagram-wrap">
+        <div class="diagram-toolbar">
+          <div class="zoom-controls">
+            <button id="zoomOutButton" class="secondary zoom-button" type="button">-</button>
+            <button id="fitButton" class="secondary" type="button">Fit</button>
+            <button id="zoomInButton" class="secondary zoom-button" type="button">+</button>
+            <span class="zoom-label" id="zoomLabel">100%</span>
+          </div>
+          <div class="diagram-hint">滚轮缩放，拖动画布，窗口变化时自动重新适配。</div>
+        </div>
+        <div class="diagram-viewport" id="diagramViewport">
+          <div class="diagram-stage">
+            <div class="diagram-canvas" id="mermaidMount"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'base',
+      securityLevel: 'loose',
+      themeVariables: {
+        primaryColor: '#fff8ec',
+        primaryTextColor: '#2c2419',
+        primaryBorderColor: '#c9b498',
+        lineColor: '#7c6b58',
+        secondaryColor: '#e8dcc4',
+        tertiaryColor: '#f8efe2',
+        fontFamily: 'Avenir Next, PingFang SC, Microsoft YaHei, sans-serif'
+      },
+      flowchart: {
+        curve: 'basis',
+        htmlLabels: true
+      }
+    });
+
+    const steps = [
+      {
+        id: 'capture',
+        index: '01',
+        title: '触发输入',
+        file: 'ui_mac/app.py / ui_windows/app.py',
+        desc: '通过双击复制热键或直接粘贴，把文本送入桌面 UI。这里是整条链路的起点，也决定是否走 OCR 分支。',
+        code: `DoubleCmdCListener -> _handle_hotkey()\nPaste Event -> _handle_paste()\nClipboard text -> input_text widget`,
+        note: 'README.zh.md 把主流程概括为“全局热键触发 -> 读取剪贴板 -> 发送到本地 Ollama -> UI 显示译文”。'
+      },
+      {
+        id: 'ocr',
+        index: '02',
+        title: 'OCR 提取',
+        file: 'ui_mac/ocr.py / ui_windows/ocr.py',
+        desc: '当粘贴内容是图片时，UI 会先调用系统 OCR，把图片内容转换成可翻译文本，再并入后续管线。',
+        code: `get_paste_images()\nrun_ocr_async(...)\nOCR text -> input_text`,
+        note: '这是条件分支，不影响纯文本路径；README 中也单独说明了 OCR 依赖系统能力。'
+      },
+      {
+        id: 'split',
+        index: '03',
+        title: '分段与上下文',
+        file: 'core/pipeline.py',
+        desc: 'run_pipeline() 会根据 split_mode 选择 plain 或 context 模式。长文本会被拆成多个 Segment，context 模式会携带前文片段。',
+        code: `segments = make_segments(text, opt)\nif opt.split_mode == CONTEXT:\n    split_with_limited_context(...)\nelse:\n    split_plain(...)`,
+        note: '这里直接决定提示词是否带上下文，也是 repo 里处理长文本质量的关键点。'
+      },
+      {
+        id: 'prompt',
+        index: '04',
+        title: '提示词构建',
+        file: 'core/prompt.py',
+        desc: 'build_prompt() 根据语言、术语和 context 自动挑选模板。带 context 时会进入 CONTEXTUAL 模板。',
+        code: `preset = _auto_preset(opt, source_text)\nif opt.context.strip():\n    preset = PromptPreset.CONTEXTUAL\nprompt = build_prompt(seg.text, p_opt)`,
+        note: '这一步把 repo 的“严格只输出译文”策略变成实际 prompt。'
+      },
+      {
+        id: 'ollama',
+        index: '05',
+        title: 'Ollama 推理',
+        file: 'backend/ollama_backend.py',
+        desc: 'OllamaBackend 抽象了 LOCAL 和 HTTP 两种模式，统一暴露 generate(prompt) 接口给 pipeline 调用。',
+        code: `messages = [{"role": "user", "content": prompt}]\nif mode == LOCAL:\n    return _chat_local(messages)\nreturn _chat_http(messages)`,
+        note: 'Windows 的 local 模式内部会转 HTTP，这点在 README 里也有明确说明。'
+      },
+      {
+        id: 'postprocess',
+        index: '06',
+        title: '后处理抽取',
+        file: 'core/postprocess.py',
+        desc: '模型返回原始文本后，extract_translation() 会清理标签、引号、多余前缀，只保留最终译文。',
+        code: `target = extract_translation(raw, opt.post_opt)\nremove labels -> strip quotes -> normalize spacing`,
+        note: '这一步负责把模型输出收敛成稳定的最终结果。'
+      },
+      {
+        id: 'render',
+        index: '07',
+        title: '渲染输出',
+        file: 'core/pipeline.py / ui_mac/app.py',
+        desc: 'pairs 会被 render_output() 组装成 translations_only 或 interleaved，再显示在 UI 文本框中。',
+        code: `pairs.append(AlignedPair(...))\ntext = render_output(pairs, mode)\noutput_text.insert("1.0", text)`,
+        note: '最终用户看到的是这里生成的拼接结果，而不是模型原始返回值。'
+      }
+    ];
+
+    const dom = {
+      timeline: document.querySelector('#timeline'),
+      detailTitle: document.querySelector('#detailTitle'),
+      detailText: document.querySelector('#detailText'),
+      detailCode: document.querySelector('#detailCode'),
+      detailNote: document.querySelector('#detailNote'),
+      metricStep: document.querySelector('#metricStep'),
+      metricMode: document.querySelector('#metricMode'),
+      metricInput: document.querySelector('#metricInput'),
+      mermaidMount: document.querySelector('#mermaidMount'),
+      diagramViewport: document.querySelector('#diagramViewport'),
+      zoomLabel: document.querySelector('#zoomLabel'),
+      zoomInButton: document.querySelector('#zoomInButton'),
+      zoomOutButton: document.querySelector('#zoomOutButton'),
+      fitButton: document.querySelector('#fitButton'),
+      playButton: document.querySelector('#playButton'),
+      prevButton: document.querySelector('#prevButton'),
+      nextButton: document.querySelector('#nextButton'),
+      resetButton: document.querySelector('#resetButton'),
+      ocrToggle: document.querySelector('#ocrToggle'),
+      contextToggle: document.querySelector('#contextToggle')
+    };
+
+    let currentStep = 0;
+    let autoplayTimer = null;
+    let zoomState = {
+      scale: 1,
+      fitScale: 1,
+      baseWidth: 0,
+      baseHeight: 0
+    };
+    let wheelAccumulator = 0;
+    let dragState = {
+      active: false,
+      startX: 0,
+      startY: 0,
+      scrollLeft: 0,
+      scrollTop: 0
+    };
+
+    function getVisibleSteps() {
+      const showOcr = dom.ocrToggle.checked;
+      return steps.filter((step) => showOcr || step.id !== 'ocr');
+    }
+
+    function buildTimeline() {
+      const visibleSteps = getVisibleSteps();
+      dom.timeline.innerHTML = visibleSteps.map((step, idx) => {
+        const optionalClass = step.id === 'ocr' ? 'optional' : '';
+        return `
+          <article class="step-card ${optionalClass}" data-step="${step.id}">
+            <div class="step-top">
+              <span class="step-index">Step ${String(idx + 1).padStart(2, '0')}</span>
+              <strong>${step.id === 'ocr' ? 'Optional Branch' : 'Core Path'}</strong>
+            </div>
+            <h3 class="step-title">${step.title}</h3>
+            <div class="step-file">${step.file}</div>
+            <p class="step-desc">${step.desc}</p>
+            <div class="stream-bar"></div>
+          </article>
+        `;
+      }).join('');
+
+      dom.timeline.querySelectorAll('.step-card').forEach((card, idx) => {
+        card.addEventListener('click', () => {
+          currentStep = idx;
+          stopAutoplay();
+          render();
+        });
+      });
+    }
+
+    function getMermaidSource(stepId, includeOcr, useContext) {
+      const splitLabel = useContext ? '分段: Context' : '分段: Plain';
+      const promptLabel = useContext ? 'Prompt: CONTEXTUAL' : 'Prompt: Standard';
+
+      const activeClass = (id) => stepId === id ? `class ${id} activeNode;` : '';
+      const optionalClass = includeOcr ? 'class ocr optionalNode;' : '';
+
+      return `
+flowchart LR
+    capture["热键 / 粘贴输入"]
+    ocr["OCR 提取"]
+    split["${splitLabel}"]
+    prompt["${promptLabel}"]
+    ollama["OllamaBackend.generate()"]
+    postprocess["extract_translation()"]
+    render["render_output() / UI"]
+
+    capture --> split
+    capture -. 图片粘贴 .-> ocr
+    ocr --> split
+    split --> prompt
+    prompt --> ollama
+    ollama --> postprocess
+    postprocess --> render
+
+    classDef default fill:#fff7ea,stroke:#bca585,stroke-width:1.4px,color:#2c2419;
+    classDef activeNode fill:#d95d39,stroke:#8b321a,stroke-width:2.4px,color:#fff8f0;
+    classDef optionalNode fill:#ece1cf,stroke:#bda788,stroke-dasharray: 5 4,color:#574835;
+
+    ${activeClass('capture')}
+    ${activeClass('ocr')}
+    ${activeClass('split')}
+    ${activeClass('prompt')}
+    ${activeClass('ollama')}
+    ${activeClass('postprocess')}
+    ${activeClass('render')}
+    ${optionalClass}
+`;
+    }
+
+    async function renderMermaid(activeId) {
+      const source = getMermaidSource(activeId, dom.ocrToggle.checked, dom.contextToggle.checked);
+      const id = `repo-flow-${Date.now()}`;
+      const { svg } = await mermaid.render(id, source);
+      dom.mermaidMount.innerHTML = svg;
+      setupDiagramSizing();
+      applyZoom(zoomState.fitScale);
+    }
+
+    function setupDiagramSizing() {
+      const svg = dom.mermaidMount.querySelector('svg');
+      if (!svg) return;
+
+      const viewBox = svg.viewBox.baseVal;
+      const width = viewBox && viewBox.width ? viewBox.width : (svg.getBBox ? svg.getBBox().width : svg.clientWidth);
+      const height = viewBox && viewBox.height ? viewBox.height : (svg.getBBox ? svg.getBBox().height : svg.clientHeight);
+
+      zoomState.baseWidth = Math.max(width, 1);
+      zoomState.baseHeight = Math.max(height, 1);
+
+      svg.setAttribute('width', String(zoomState.baseWidth));
+      svg.setAttribute('height', String(zoomState.baseHeight));
+      svg.style.width = `${zoomState.baseWidth}px`;
+      svg.style.height = `${zoomState.baseHeight}px`;
+
+      computeFitScale();
+    }
+
+    function computeFitScale() {
+      const viewportWidth = dom.diagramViewport.clientWidth - 48;
+      const viewportHeight = dom.diagramViewport.clientHeight - 48;
+      if (!zoomState.baseWidth || !zoomState.baseHeight || viewportWidth <= 0 || viewportHeight <= 0) {
+        zoomState.fitScale = 1;
+        return;
+      }
+
+      const widthScale = viewportWidth / zoomState.baseWidth;
+      const heightScale = viewportHeight / zoomState.baseHeight;
+      zoomState.fitScale = Math.min(widthScale, heightScale, 1.6);
+    }
+
+    function updateCanvasSize(scale) {
+      dom.mermaidMount.style.transform = `scale(${scale})`;
+      dom.mermaidMount.style.width = `${zoomState.baseWidth * scale}px`;
+      dom.mermaidMount.style.height = `${zoomState.baseHeight * scale}px`;
+      dom.zoomLabel.textContent = `${Math.round(scale * 100)}%`;
+    }
+
+    function applyZoom(nextScale, preserveCenter = false) {
+      const clamped = Math.min(3, Math.max(0.35, nextScale));
+      const viewport = dom.diagramViewport;
+
+      const prevScale = zoomState.scale || clamped;
+      let centerX = 0;
+      let centerY = 0;
+      if (preserveCenter) {
+        centerX = (viewport.scrollLeft + viewport.clientWidth / 2) / prevScale;
+        centerY = (viewport.scrollTop + viewport.clientHeight / 2) / prevScale;
+      }
+
+      zoomState.scale = clamped;
+      updateCanvasSize(clamped);
+
+      if (preserveCenter) {
+        viewport.scrollLeft = Math.max(0, centerX * clamped - viewport.clientWidth / 2);
+        viewport.scrollTop = Math.max(0, centerY * clamped - viewport.clientHeight / 2);
+      } else {
+        viewport.scrollLeft = Math.max(0, (zoomState.baseWidth * clamped - viewport.clientWidth) / 2);
+        viewport.scrollTop = Math.max(0, (zoomState.baseHeight * clamped - viewport.clientHeight) / 2);
+      }
+    }
+
+    function fitDiagram() {
+      computeFitScale();
+      applyZoom(zoomState.fitScale);
+    }
+
+    function renderDetails(step) {
+      dom.detailTitle.textContent = `${step.index} ${step.title}`;
+      dom.detailText.textContent = step.desc;
+      dom.detailCode.textContent = step.code;
+      dom.detailNote.textContent = step.note;
+    }
+
+    function renderMetrics(position, total) {
+      dom.metricStep.textContent = String(position + 1).padStart(2, '0');
+      dom.metricMode.textContent = dom.contextToggle.checked ? 'Context' : 'Plain';
+      dom.metricInput.textContent = dom.ocrToggle.checked ? '文本 + 图片' : '纯文本';
+    }
+
+    async function render() {
+      buildTimeline();
+      const visibleSteps = getVisibleSteps();
+      currentStep = Math.max(0, Math.min(currentStep, visibleSteps.length - 1));
+      const active = visibleSteps[currentStep];
+
+      dom.timeline.querySelectorAll('.step-card').forEach((card, idx) => {
+        card.classList.toggle('active', idx === currentStep);
+      });
+
+      renderDetails(active);
+      renderMetrics(currentStep, visibleSteps.length);
+      await renderMermaid(active.id);
+    }
+
+    function stopAutoplay() {
+      if (autoplayTimer) {
+        clearInterval(autoplayTimer);
+        autoplayTimer = null;
+        dom.playButton.textContent = '自动播放';
+      }
+    }
+
+    function startAutoplay() {
+      const visibleSteps = getVisibleSteps();
+      stopAutoplay();
+      dom.playButton.textContent = '停止播放';
+      autoplayTimer = setInterval(() => {
+        currentStep = (currentStep + 1) % visibleSteps.length;
+        render();
+      }, 1700);
+    }
+
+    dom.playButton.addEventListener('click', () => {
+      if (autoplayTimer) {
+        stopAutoplay();
+      } else {
+        startAutoplay();
+      }
+    });
+
+    dom.prevButton.addEventListener('click', () => {
+      stopAutoplay();
+      currentStep = Math.max(0, currentStep - 1);
+      render();
+    });
+
+    dom.nextButton.addEventListener('click', () => {
+      stopAutoplay();
+      currentStep = Math.min(getVisibleSteps().length - 1, currentStep + 1);
+      render();
+    });
+
+    dom.resetButton.addEventListener('click', () => {
+      stopAutoplay();
+      currentStep = 0;
+      dom.ocrToggle.checked = false;
+      dom.contextToggle.checked = true;
+      render();
+    });
+
+    dom.zoomInButton.addEventListener('click', () => {
+      applyZoom(zoomState.scale * 1.18, true);
+    });
+
+    dom.zoomOutButton.addEventListener('click', () => {
+      applyZoom(zoomState.scale / 1.18, true);
+    });
+
+    dom.fitButton.addEventListener('click', () => {
+      fitDiagram();
+    });
+
+    dom.ocrToggle.addEventListener('change', () => {
+      stopAutoplay();
+      currentStep = 0;
+      render();
+    });
+
+    dom.contextToggle.addEventListener('change', () => {
+      stopAutoplay();
+      render();
+    });
+
+    dom.diagramViewport.addEventListener('wheel', (event) => {
+      event.preventDefault();
+
+      const normalizedDelta = Math.abs(event.deltaY) < 20 ? event.deltaY * 0.35 : event.deltaY * 0.18;
+      wheelAccumulator += normalizedDelta;
+
+      if (Math.abs(wheelAccumulator) < 18) {
+        return;
+      }
+
+      const direction = wheelAccumulator < 0 ? 1 : -1;
+      const intensity = Math.min(Math.abs(wheelAccumulator) / 140, 0.16);
+      const factor = 1 + direction * intensity;
+
+      wheelAccumulator = 0;
+      applyZoom(zoomState.scale * factor, true);
+    }, { passive: false });
+
+    dom.diagramViewport.addEventListener('pointerdown', (event) => {
+      if (event.target.closest('button')) return;
+      dragState.active = true;
+      dragState.startX = event.clientX;
+      dragState.startY = event.clientY;
+      dragState.scrollLeft = dom.diagramViewport.scrollLeft;
+      dragState.scrollTop = dom.diagramViewport.scrollTop;
+      dom.diagramViewport.classList.add('dragging');
+    });
+
+    window.addEventListener('pointerup', () => {
+      dragState.active = false;
+      dom.diagramViewport.classList.remove('dragging');
+    });
+
+    window.addEventListener('pointermove', (event) => {
+      if (!dragState.active) return;
+      dom.diagramViewport.scrollLeft = dragState.scrollLeft - (event.clientX - dragState.startX);
+      dom.diagramViewport.scrollTop = dragState.scrollTop - (event.clientY - dragState.startY);
+    });
+
+    window.addEventListener('resize', () => {
+      fitDiagram();
+    });
+
+    render();
+  </script>
+</body>
+</html>
