@@ -8,12 +8,12 @@ type WorkPageProps = {
 
 export function WorkPage({ controls, output, onSubmit }: WorkPageProps) {
   return (
-    <>
-      <form className="panel controls" onSubmit={onSubmit}>
+    <div className="work-layout work-stage">
+      <form className="panel controls work-panel work-panel-controls" onSubmit={onSubmit}>
         {controls}
       </form>
 
-      <section className="panel output">{output}</section>
-    </>
+      <section className="panel output work-panel work-panel-output">{output}</section>
+    </div>
   );
 }

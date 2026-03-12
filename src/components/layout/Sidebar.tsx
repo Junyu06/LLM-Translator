@@ -20,10 +20,10 @@ const items: SidebarItem[] = [
 
 export function Sidebar({ activeView, onSelect }: SidebarProps) {
   return (
-    <aside className="sidebar panel">
+    <aside className="sidebar shell-sidebar panel">
       <div className="sidebar-header">
         <p className="section-kicker">Navigation</p>
-        <h2>Workspace</h2>
+        <h2 className="sidebar-title">Workspace</h2>
       </div>
 
       <nav className="sidebar-nav" aria-label="Primary">

@@ -4,20 +4,22 @@ type AppShellProps = {
   topBar: ReactNode;
   sidebar?: ReactNode;
   statusBar: ReactNode;
+  contextPanel?: ReactNode;
   children: ReactNode;
 };
 
-export function AppShell({ topBar, sidebar, statusBar, children }: AppShellProps) {
+export function AppShell({ topBar, sidebar, statusBar, contextPanel, children }: AppShellProps) {
   return (
-    <main className="shell">
-      <header className="masthead">
+    <main className="shell app-shell">
+      <header className="masthead shell-header">
         {topBar}
         {statusBar}
       </header>
 
-      <section className="workspace">
+      <section className={`workspace shell-body ${contextPanel ? "has-context-panel" : ""}`}>
         {sidebar}
-        {children}
+        <div className="main-stage shell-main">{children}</div>
+        {contextPanel}
       </section>
     </main>
   );

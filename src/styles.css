@@ -35,6 +35,7 @@ body {
   min-height: 100vh;
 }
 
+/* Shell layout */
 .shell {
   width: min(1320px, calc(100vw - 40px));
   margin: 0 auto;
@@ -53,6 +54,17 @@ body {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-width: 0;
+}
+
+.topbar-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.topbar-copy {
   min-width: 0;
 }
 
@@ -125,9 +137,7 @@ body {
   color: var(--accent);
 }
 
-.masthead h1,
-.controls h2,
-.output h2 {
+.topbar-title {
   font-family: "Iowan Old Style", "Georgia", serif;
   margin: 8px 0 0;
   font-size: clamp(2rem, 3.2vw, 2.9rem);
@@ -163,11 +173,20 @@ body {
 
 .workspace {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1.05fr) minmax(360px, 0.95fr);
+  grid-template-columns: 240px minmax(0, 1fr);
   gap: 20px;
   align-items: start;
 }
 
+.workspace.has-context-panel {
+  grid-template-columns: 240px minmax(0, 1fr) minmax(240px, 320px);
+}
+
+.main-stage {
+  min-width: 0;
+}
+
+/* Navigation and context */
 .sidebar {
   min-height: calc(100vh - 180px);
   gap: 18px;
@@ -175,19 +194,56 @@ body {
   flex-direction: column;
 }
 
+.context-panel,
+.context-panel-rail {
+  min-height: calc(100vh - 180px);
+}
+
+.context-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.context-panel-rail {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.context-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.context-panel-header h2 {
+  font-family: "Iowan Old Style", "Georgia", serif;
+  margin: 0;
+  font-size: 1.55rem;
+  line-height: 1.05;
+}
+
+.sidebar-title,
+.page-title,
+.section-title,
+.context-panel-title {
+  font-family: "Iowan Old Style", "Georgia", serif;
+  margin: 0;
+  font-size: 1.55rem;
+  line-height: 1.05;
+}
+
+.context-toggle {
+  white-space: nowrap;
+}
+
 .sidebar-header,
 .page-header-block {
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-
-.sidebar-header h2,
-.placeholder-page h2 {
-  font-family: "Iowan Old Style", "Georgia", serif;
-  margin: 0;
-  font-size: 1.55rem;
-  line-height: 1.05;
 }
 
 .sidebar-nav {
@@ -215,6 +271,37 @@ body {
   min-height: calc(100vh - 180px);
 }
 
+/* Page layouts */
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.settings-section {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.settings-section-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-section-copy h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .placeholder-page {
   display: flex;
   flex-direction: column;
@@ -222,6 +309,7 @@ body {
   justify-content: flex-start;
 }
 
+.work-panel,
 .controls,
 .output {
   display: flex;
@@ -230,6 +318,14 @@ body {
   min-height: calc(100vh - 180px);
 }
 
+.work-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
+  gap: 20px;
+  align-items: start;
+}
+
+/* Form and content primitives */
 .panel-heading {
   display: flex;
   justify-content: space-between;
@@ -394,9 +490,15 @@ pre {
   line-height: 1.6;
 }
 
+/* Responsive rules */
 @media (max-width: 900px) {
   .masthead,
   .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace.has-context-panel,
+  .work-layout {
     grid-template-columns: 1fr;
   }
 
@@ -415,10 +517,16 @@ pre {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .settings-section {
+    grid-template-columns: 1fr;
+  }
+
   .controls,
   .output,
   .sidebar,
-  .page-card {
+  .page-card,
+  .context-panel,
+  .context-panel-rail {
     min-height: auto;
   }
 }
@@ -445,7 +553,9 @@ pre {
   .output-header,
   .action-row,
   .output-tools,
-  .progress-stats {
+  .progress-stats,
+  .topbar-heading,
+  .context-panel-header {
     flex-direction: column;
     align-items: stretch;
   }

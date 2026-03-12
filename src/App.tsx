@@ -15,6 +15,7 @@ import {
   writeClipboardText
 } from "./lib/api";
 import { AppShell } from "./components/layout/AppShell";
+import { ContextPanel } from "./components/layout/ContextPanel";
 import { Sidebar, type AppView } from "./components/layout/Sidebar";
 import { StatusBar } from "./components/layout/StatusBar";
 import { TopBar } from "./components/layout/TopBar";
@@ -23,6 +24,12 @@ import { HomePage } from "./components/pages/HomePage";
 import { ResourcesPage } from "./components/pages/ResourcesPage";
 import { SettingsPage } from "./components/pages/SettingsPage";
 import { WorkPage } from "./components/pages/WorkPage";
+import { AppSettingsPanel } from "./components/settings/AppSettingsPanel";
+import { InputEditor } from "./components/translation/InputEditor";
+import { OutputPanel } from "./components/translation/OutputPanel";
+import { TranslationControls } from "./components/translation/TranslationControls";
+import { TranslationProgressSummary } from "./components/translation/TranslationProgressSummary";
+import { TranslationSettingsForm } from "./components/translation/TranslationSettingsForm";
 import type { AppConfig, TranslationRequest, TranslationResponse } from "./types";
 import "./styles.css";
 
@@ -140,6 +147,7 @@ export default function App() {
   const [lastResponse, setLastResponse] = useState<TranslationResponse | null>(null);
   const [isBackendReady, setIsBackendReady] = useState(false);
   const [activeView, setActiveView] = useState<AppView>("work");
+  const [isContextOpen, setIsContextOpen] = useState(true);
   const [progress, setProgress] = useState<ProgressState>(defaultProgressState);
   const currentJobIdRef = useRef<number | null>(null);
   const configRef = useRef<AppConfig>(defaultConfig);
@@ -617,203 +625,103 @@ export default function App() {
         )
       : 0;
 
-  const workPageControls = (
-    <>
-      <div className="panel-heading">
-        <div>
-          <p className="section-kicker">Control Deck</p>
-          <h2>Translation settings</h2>
-        </div>
+  const workPageSettings = (
+    <TranslationSettingsForm
+      config={config}
+      languages={languages}
+      onSourceLangChange={(value) => void updateConfig("source_lang", value)}
+      onTargetLangChange={(value) => void updateConfig("target_lang", value)}
+      onOutputModeChange={(value) => void updateConfig("output_mode", value)}
+      onUseContextChange={(checked) => void updateConfig("use_context", checked)}
+      onCollapseNewlinesChange={(checked) => void updateConfig("collapse_newlines", checked)}
+    />
+  );
+
+  const settingsPageContent = (
+    <AppSettingsPanel
+      config={config}
+      onModeChange={(value) => void updateConfig("mode", value)}
+      onModelChange={(value) => void updateConfig("model", value)}
+      onHostChange={(value) => void updateConfig("host", value)}
+      onHotkeyEnabledChange={(checked) => void updateConfig("hotkey_enabled", checked)}
+      onMinimizeToTrayChange={(checked) => void updateConfig("minimize_to_tray", checked)}
+    />
+  );
+
+  const workPageInput = (
+    <InputEditor
+      value={input}
+      onChange={(event) => setInput(event.target.value)}
+      onPaste={handleInputPaste}
+      rows={12}
+    />
+  );
+
+  const workPageActions = (
+    <div className="actions">
+      <div className="action-row">
+        <button className="primary" type="submit" disabled={isSubmitting || !isBackendReady}>
+          {isSubmitting ? "Translating..." : "Translate"}
+        </button>
         <button
-          className="ghost"
+          className="ghost action-button"
           type="button"
-          onClick={swapLanguages}
-          disabled={config.source_lang === "auto"}
+          disabled={isSubmitting || !isBackendReady}
+          onClick={() => void handleTranslateClipboard()}
         >
-          Swap languages
+          Translate clipboard
+        </button>
+        <button
+          className="ghost action-button"
+          type="button"
+          disabled={isSubmitting || !isBackendReady}
+          onClick={() => void handleOcrClipboardImage()}
+        >
+          OCR clipboard image
+        </button>
+        <button className="ghost action-button" type="button" disabled={!isSubmitting} onClick={() => void handleStop()}>
+          Stop
         </button>
       </div>
+      <span className="helper-text">
+        Paste text normally. If the clipboard holds an image, paste into Input or use OCR clipboard image to
+        extract text first.
+      </span>
+    </div>
+  );
 
-      <div className="grid compact-grid">
-        <label className="field">
-          <span className="field-label">Source</span>
-          <select
-            value={config.source_lang}
-            onChange={(event) => void updateConfig("source_lang", event.target.value)}
-          >
-            {languages.map((lang) => (
-              <option key={lang} value={lang}>
-                {lang}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="field">
-          <span className="field-label">Target</span>
-          <select
-            value={config.target_lang}
-            onChange={(event) => void updateConfig("target_lang", event.target.value)}
-          >
-            {languages.filter((lang) => lang !== "auto").map((lang) => (
-              <option key={lang} value={lang}>
-                {lang}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="field">
-          <span className="field-label">Backend</span>
-          <select
-            value={config.mode}
-            onChange={(event) => void updateConfig("mode", event.target.value as AppConfig["mode"])}
-          >
-            <option value="local">local</option>
-            <option value="http">http</option>
-          </select>
-        </label>
-
-        <label className="field">
-          <span className="field-label">Output</span>
-          <select
-            value={config.output_mode}
-            onChange={(event) =>
-              void updateConfig("output_mode", event.target.value as AppConfig["output_mode"])
-            }
-          >
-            <option value="translations_only">translations_only</option>
-            <option value="interleaved">interleaved</option>
-          </select>
-        </label>
-      </div>
-
-      <label className="field">
-        <span className="field-label">Model</span>
-        <input value={config.model} onChange={(event) => void updateConfig("model", event.target.value)} />
-      </label>
-
-      <label className="field">
-        <span className="field-label">Host</span>
-        <input value={config.host} onChange={(event) => void updateConfig("host", event.target.value)} />
-      </label>
-
-      <div className="toggle-grid">
-        <label className="toggle-card">
-          <input
-            type="checkbox"
-            checked={config.use_context}
-            onChange={(event) => void updateConfig("use_context", event.target.checked)}
-          />
-          <span>
-            <strong>Use Context</strong>
-            <em>Send adjacent segment context into the prompt.</em>
-          </span>
-        </label>
-
-        <label className="toggle-card">
-          <input
-            type="checkbox"
-            checked={config.collapse_newlines}
-            onChange={(event) => void updateConfig("collapse_newlines", event.target.checked)}
-          />
-          <span>
-            <strong>Collapse Newlines</strong>
-            <em>Reduce overly tall output blocks after rendering.</em>
-          </span>
-        </label>
-
-        <label className="toggle-card">
-          <input
-            type="checkbox"
-            checked={config.hotkey_enabled}
-            onChange={(event) => void updateConfig("hotkey_enabled", event.target.checked)}
-          />
-          <span>
-            <strong>Double-Copy Hotkey</strong>
-            <em>Use Cmd+C Cmd+C on macOS or Ctrl+C Ctrl+C on Windows.</em>
-          </span>
-        </label>
-
-        <label className="toggle-card">
-          <input
-            type="checkbox"
-            checked={config.minimize_to_tray}
-            onChange={(event) => void updateConfig("minimize_to_tray", event.target.checked)}
-          />
-          <span>
-            <strong>Minimize To Tray</strong>
-            <em>Closing the desktop window hides it instead of quitting the app.</em>
-          </span>
-        </label>
-      </div>
-
-      <label className="field">
-        <span className="field-label">Input</span>
-        <textarea
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onPaste={handleInputPaste}
-          rows={12}
-        />
-      </label>
-
-      <div className="actions">
-        <div className="action-row">
-          <button className="primary" type="submit" disabled={isSubmitting || !isBackendReady}>
-            {isSubmitting ? "Translating..." : "Translate"}
-          </button>
-          <button
-            className="ghost action-button"
-            type="button"
-            disabled={isSubmitting || !isBackendReady}
-            onClick={() => void handleTranslateClipboard()}
-          >
-            Translate clipboard
-          </button>
-          <button
-            className="ghost action-button"
-            type="button"
-            disabled={isSubmitting || !isBackendReady}
-            onClick={() => void handleOcrClipboardImage()}
-          >
-            OCR clipboard image
-          </button>
-          <button
-            className="ghost action-button"
-            type="button"
-            disabled={!isSubmitting}
-            onClick={() => void handleStop()}
-          >
-            Stop
-          </button>
-        </div>
-        <span className="helper-text">
-          Paste text normally. If the clipboard holds an image, paste into Input or use OCR clipboard image to
-          extract text first.
-        </span>
-      </div>
-    </>
+  const workPageControls = (
+    <TranslationControls
+      onSwapLanguages={swapLanguages}
+      swapDisabled={config.source_lang === "auto"}
+      settings={workPageSettings}
+      input={workPageInput}
+      actions={workPageActions}
+    />
   );
 
   const workPageOutput = (
-    <>
-      <div className="output-header">
-        <div>
-          <p className="section-kicker">Output</p>
-          <h2>Rendered translation</h2>
-        </div>
-        <div className="output-tools">
-          <span className="output-meta">
-            {lastResponse?.detected_source_lang ? `Detected: ${lastResponse.detected_source_lang}` : "Awaiting input"}
-          </span>
-          <button className="ghost action-button" type="button" onClick={() => void handleCopyOutput()}>
-            Copy output
-          </button>
-        </div>
-      </div>
-      <pre>{output || "Translation result will appear here, segment by segment."}</pre>
-    </>
+    <OutputPanel
+      detectedSourceLanguage={lastResponse?.detected_source_lang}
+      output={output}
+      onCopy={() => void handleCopyOutput()}
+    />
+  );
+
+  const workContextPanel = (
+    <ContextPanel
+      title="Translation progress"
+      isOpen={isContextOpen}
+      onToggle={() => setIsContextOpen((current) => !current)}
+    >
+      <TranslationProgressSummary
+        progress={progress}
+        progressRatio={progressRatio}
+        statusLabel={segmentStatusLabel(progress)}
+        sourcePreview={compactPreview(progress.activeSegmentSource)}
+        targetPreview={compactPreview(progress.activeSegmentTarget, "Target text will stream here.")}
+      />
+    </ContextPanel>
   );
 
   function renderActiveView() {
@@ -825,7 +733,7 @@ export default function App() {
       case "resources":
         return <ResourcesPage />;
       case "settings":
-        return <SettingsPage />;
+        return <SettingsPage>{settingsPageContent}</SettingsPage>;
       case "work":
       default:
         return <WorkPage controls={workPageControls} output={workPageOutput} onSubmit={handleSubmit} />;
@@ -835,27 +743,21 @@ export default function App() {
   return (
     <AppShell
       topBar={
-        <TopBar eyebrow="Local Desktop Translator" title="Single UI, Python brain, Tauri shell">
-          <div className="progress-board">
-            <div className="progress-stats">
-              <span>{progress.activeSegmentIndex ? `Segment ${progress.activeSegmentIndex}` : "Waiting"}</span>
-              <span>{progress.totalSegments ? `${progress.completedSegments}/${progress.totalSegments} done` : "0/0 done"}</span>
-              <span>{segmentStatusLabel(progress)}</span>
-            </div>
-            <div className="progress-rail">
-              <div className="progress-fill" style={{ width: `${progressRatio}%` }} />
-            </div>
-            <div className="segment-card">
-              <p className="segment-label">Current Source</p>
-              <p>{compactPreview(progress.activeSegmentSource)}</p>
-              <p className="segment-label">Current Target</p>
-              <p>{compactPreview(progress.activeSegmentTarget, "Target text will stream here.")}</p>
-            </div>
-          </div>
-        </TopBar>
+        <TopBar
+          eyebrow="Local Desktop Translator"
+          title="Single UI, Python brain, Tauri shell"
+          actions={
+            activeView === "work" ? (
+              <button className="ghost" type="button" onClick={() => setIsContextOpen((current) => !current)}>
+                {isContextOpen ? "Hide context" : "Show context"}
+              </button>
+            ) : null
+          }
+        />
       }
       sidebar={<Sidebar activeView={activeView} onSelect={setActiveView} />}
       statusBar={<StatusBar status={status} isReady={isBackendReady} />}
+      contextPanel={activeView === "work" ? workContextPanel : undefined}
     >
       {renderActiveView()}
     </AppShell>
