@@ -9,24 +9,18 @@ type ContextPanelProps = {
 
 export function ContextPanel({ title, isOpen, onToggle, children }: ContextPanelProps) {
   if (!isOpen) {
-    return (
-      <aside className="context-panel-rail shell-context-rail">
-        <button className="ghost context-toggle" type="button" onClick={onToggle} aria-expanded={false}>
-          Show details
-        </button>
-      </aside>
-    );
+    return null; // The toggle is now in the TopBar
   }
 
   return (
-    <aside className="panel context-panel shell-context">
-      <div className="context-panel-header">
+    <aside className="shell-context">
+      <div className="output-header" style={{marginBottom: '20px'}}>
         <div>
           <p className="section-kicker">Context</p>
-          <h2 className="context-panel-title">{title}</h2>
+          <h2 className="section-title" style={{marginBottom: 0}}>{title}</h2>
         </div>
-        <button className="ghost context-toggle" type="button" onClick={onToggle} aria-expanded={true}>
-          Hide details
+        <button className="ghost" type="button" onClick={onToggle} aria-expanded={true}>
+          Hide
         </button>
       </div>
       {children}

@@ -10,17 +10,19 @@ type AppShellProps = {
 
 export function AppShell({ topBar, sidebar, statusBar, contextPanel, children }: AppShellProps) {
   return (
-    <main className="shell app-shell">
-      <header className="masthead shell-header">
+    <div className="app-shell">
+      <header className="shell-header">
         {topBar}
         {statusBar}
       </header>
 
-      <section className={`workspace shell-body ${contextPanel ? "has-context-panel" : ""}`}>
+      <div className="shell-body">
         {sidebar}
-        <div className="main-stage shell-main">{children}</div>
-        {contextPanel}
-      </section>
-    </main>
+        <main className="shell-main">
+          {children}
+        </main>
+        {contextPanel && <aside className="shell-context">{contextPanel}</aside>}
+      </div>
+    </div>
   );
 }
