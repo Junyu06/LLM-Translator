@@ -26,7 +26,12 @@ const IconX = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" 
 const IconHistory = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>;
 const IconSearch = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>;
 
-// --- i18n ---
+// --- i18n & Lang Mapping ---
+const LANG_MAP: Record<string, Record<string, string>> = {
+  en: { auto: "Detect", zh: "Chinese", en: "English", ja: "Japanese", ko: "Korean", fr: "French", de: "German", es: "Spanish", ru: "Russian" },
+  zh: { auto: "自动检测", zh: "中文", en: "英语", ja: "日语", ko: "韩语", fr: "法语", de: "德语", es: "西班牙语", ru: "俄语" }
+};
+
 const I18N = {
   en: {
     title: "Translator",
@@ -106,13 +111,9 @@ const I18N = {
 
 // --- Types ---
 type HistoryItem = { id: string; source: string; target: string; timestamp: number };
-
-interface ExtendedConfig extends AppConfig {
-  theme?: "light" | "dark" | "system";
-  ui_lang?: "en" | "zh";
-}
-
+interface ExtendedConfig extends AppConfig { theme?: "light" | "dark" | "system"; ui_lang?: "en" | "zh"; }
 const LANGUAGES = ["auto", "zh", "en", "ja", "ko", "fr", "de", "es", "ru"];
+
 const defaultConfig: ExtendedConfig = {
   source_lang: "auto",
   target_lang: "zh",
@@ -131,10 +132,7 @@ const defaultConfig: ExtendedConfig = {
 };
 
 const Toggle = ({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) => (
-  <label className="switch">
-    <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} />
-    <span className="slider"></span>
-  </label>
+  <label className="switch"><input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} /><span className="slider"></span></label>
 );
 
 export default function App() {
@@ -154,16 +152,15 @@ export default function App() {
   
   const currentJobIdRef = useRef<number | null>(null);
   const t = (key: keyof typeof I18N.en) => I18N[config.ui_lang || "en"][key];
+  const langName = (code: string) => LANG_MAP[config.ui_lang || "en"][code] || code.toUpperCase();
 
   useEffect(() => {
-    void waitForBackend()
-      .then(({ config: savedConfig }) => {
-        const merged = { ...defaultConfig, ...savedConfig };
-        setConfig(merged);
-        setStatus(t("ready"));
-        document.body.setAttribute("data-theme", merged.theme || "system");
-      })
-      .catch((err) => setStatus(`Error: ${err.message}`));
+    void waitForBackend().then(({ config: savedConfig }) => {
+      const merged = { ...defaultConfig, ...savedConfig };
+      setConfig(merged);
+      setStatus(t("ready"));
+      document.body.setAttribute("data-theme", merged.theme || "system");
+    }).catch((err) => setStatus(`Error: ${err.message}`));
   }, []);
 
   useEffect(() => { localStorage.setItem("translator_history_v2", JSON.stringify(history)); }, [history]);
@@ -223,11 +220,11 @@ export default function App() {
         <div className="nav-brand">{t("title")}</div>
         <div className="lang-switcher">
           <select className="lang-select" value={config.source_lang} onChange={e => updateConfig({ source_lang: e.target.value })}>
-            {LANGUAGES.map(l => <option key={l} value={l}>{l.toUpperCase()}</option>)}
+            {LANGUAGES.map(l => <option key={l} value={l}>{langName(l)}</option>)}
           </select>
           <button className="icon-btn" onClick={() => updateConfig({ source_lang: config.target_lang, target_lang: config.source_lang })} disabled={config.source_lang === "auto"}><IconSwap /></button>
           <select className="lang-select" value={config.target_lang} onChange={e => updateConfig({ target_lang: e.target.value })}>
-            {LANGUAGES.filter(l => l !== "auto").map(l => <option key={l} value={l}>{l.toUpperCase()}</option>)}
+            {LANGUAGES.filter(l => l !== "auto").map(l => <option key={l} value={l}>{langName(l)}</option>)}
           </select>
         </div>
         <div className="nav-actions">
@@ -291,23 +288,13 @@ export default function App() {
                   </div>
                 </div>
                 <div className="settings-row">
-                  <div className="settings-info">
-                    <div className="settings-name">{t("model")}</div>
-                    <div className="settings-desc">{t("model_desc")}</div>
-                  </div>
-                  <div className="settings-input-wrapper">
-                    <input className="settings-input" value={config.model} onChange={e => updateConfig({ model: e.target.value })} />
-                  </div>
+                  <div className="settings-info"><div className="settings-name">{t("model")}</div><div className="settings-desc">{t("model_desc")}</div></div>
+                  <div className="settings-input-wrapper"><input className="settings-input" value={config.model} onChange={e => updateConfig({ model: e.target.value })} /></div>
                 </div>
                 {config.mode === "ollama" && (
                   <div className="settings-row">
-                    <div className="settings-info">
-                      <div className="settings-name">{t("host")}</div>
-                      <div className="settings-desc">{t("host_desc")}</div>
-                    </div>
-                    <div className="settings-input-wrapper">
-                      <input className="settings-input" value={config.host} onChange={e => updateConfig({ host: e.target.value })} />
-                    </div>
+                    <div className="settings-info"><div className="settings-name">{t("host")}</div><div className="settings-desc">{t("host_desc")}</div></div>
+                    <div className="settings-input-wrapper"><input className="settings-input" value={config.host} onChange={e => updateConfig({ host: e.target.value })} /></div>
                   </div>
                 )}
               </div>
@@ -355,7 +342,7 @@ export default function App() {
               </div>
             </div>
 
-            <button className="primary-btn" style={{ width: "100%", justifyContent: "center" }} onClick={() => setShowSettings(false)}>{t("done")}</button>
+            <button className="primary-btn" style={{ width: "100%" }} onClick={() => setShowSettings(false)}>{t("done")}</button>
           </div>
         </div>
       )}
