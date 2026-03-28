@@ -1,44 +1,50 @@
-# Translator UI Design System: "Content-First Minimalism" (V2)
+# The Professional Minimalist Design Manifesto (V4)
+## 专业极简主义设计宣言：生产力工具的视觉与交互准则
 
-这套 UI 设计系统旨在通过极致的细节打磨和逻辑布局，为翻译工具建立一套兼具“生产力”与“美感”的视觉标准。
+本指南总结了在开发高频使用、内容导向型工具（如翻译器、编辑器、笔记应用）时沉淀的可复用设计经验。其核心在于：**用精准的数学逻辑和感知补偿，替代多余的视觉修饰。**
 
-## 1. 核心视觉理念 (Design Soul)
-- **对称与平衡 (Symmetry)**：采用 `1fr auto 1fr` 的导航栏布局，确保核心操作（如语言切换）处于视觉绝对中心。
-- **呼吸感 (Space)**：通过大圆角 (20px)、充足的内边距 (32px settings padding) 和细致的边框替代粗重的线条。
-- **原生高级感 (Native Feel)**：设置项模仿 macOS 系统偏好设置，采用左右对齐布局，输入框文字右对齐且使用等宽字体。
+---
 
-## 2. 色彩与主题 (Theme Engine)
-采用 `data-theme` 属性控制，支持 `Light`, `Dark`, `System` 三种模式。
+### 1. 信息架构：文字层级即结构 (Typography as Architecture)
+当界面内容复杂时，第一反应不应是加框（Container），而是调整排版（Typo）。
+- **色彩层级 (Color Scoping)**：
+    - **Primary**: 用于核心结果。
+    - **Muted**: 用于辅助背景信息，确保在长时间阅读下不抢占注意力。
+    - **Subtle**: 仅用于不影响理解的极次要元素（如页码、时间戳）。
+- **比例平衡 (Scale Ratio)**：
+    - 保持 `1:1.15` 的字号比例。例如，原文 0.9em，译文 1.05em。这种细微的差距能让大脑在不察觉的情况下完成信息的优先级分类。
+- **空间分割 (Space as Divider)**：
+    - **留白即线条**：使用超大间距（如 `1.75rem`）代替物理分割线。留白能引导视线流动，而线条会切断视线流动。
 
-| 元素 | 亮色模式 (Light) | 暗色模式 (Dark) |
-| :--- | :--- | :--- |
-| **App Background** | `#ffffff` | `#0c0c0e` |
-| **Surface (Panels)** | `#f9f9fb` | `#141417` |
-| **Accent (Primary)** | `#6366f1` | `#818cf8` |
-| **Text (Primary)** | `#1a1a1c` | `#f4f4f5` |
-| **Text (Muted)** | `#64748b` | `#a1a1aa` |
+### 2. 感知对齐：视觉补偿法则 (The 0.5px Rule)
+纯粹的数学对齐（如 `align-items: center`）往往在视觉上是偏心的，尤其是处理图标与文字混合时。
+- **基线补偿 (Baseline Offset)**：
+    - **图标下沉**：大多数现代无衬线字体（如 Inter, San Francisco）的视觉重心略高于几何中心。所有圆形按钮内的 SVG 均应应用 `transform: translateY(0.5px)` 进行感知对齐。
+- **消除行高干扰 (Zero Line-Height)**：
+    - 在混合对齐的容器（如图标+文字的按钮）中使用 `inline-flex` 配合 `line-height: 0`。这能确保按钮的高度完全由内容控制，而非被文字的隐形行高撑开。
 
-## 3. 组件规范 (Components)
+### 3. 组件哲学：原生高级感的来源 (Crafting the "Native" Feel)
+让应用像操作系统的一部分，而不是一个网页。
+- **三段式模态框 (Three-Part Modal)**：
+    - 永远将 `Header`（标题）、`Body`（滚动区）、`Footer`（操作区）物理分离。`Footer` 必须固定，确保在长列表或高缩放比例下，核心动作永远可触达。
+- **语义化对齐 (Semantic Alignment)**：
+    - 参考系统偏好设置：左侧为描述性标签（靠左对齐），右侧为交互组件（靠右对齐）。这种“两端拉伸”的布局能最大化利用空间并建立明确的逻辑关联。
+- **触觉反馈 (Micro-Feedback)**：
+    - 点击时微缩放 (`scale(0.98)`)，而非仅仅改变颜色。这种物理维度的反馈能显著提升应用的“实体感”。
 
-### 3.1 语言切换器 (Lang Switcher)
-- **容器**：药丸状圆角，固定高度，内含对称的选择框。
-- **选择框**：`min-width: 110px`，文字居中对齐，废弃简写（使用 Full Name）。
-- **交互**：悬浮时变换边框色，交换按钮具备 0.2s 旋转反馈。
+### 4. 隐形交互：超越界面的力量 (Invisible Interactions)
+最强大的 UI 是感知不到 UI。
+- **上下文感知占位符 (Smart Placeholders)**：
+    - 占位符不应只是描述性的，而应是教学性的。通过占位符文案（如“支持粘贴图片...”）直接引导用户发现隐藏的高阶功能。
+- **拦截式工作流 (Interception Pattern)**：
+    - 监听全局事件（如 `onPaste`）来简化操作。如果用户粘贴的是图片，系统应智能判断意图并自动启动 OCR，而不是等待用户去点击那个 OCR 按钮。
+- **数据弹性 (Content Resilience)**：
+    - 永远假设输入是不完美的。长文本自动截断、空状态引导、错误状态的优雅降级。
 
-### 3.2 设置面板 (Preferences)
-- **布局**：`settings-row` 结构。左侧为 `Name + Description`，右侧为 `Widget (Input/Toggle/Segment)`。
-- **输入框**：内置于背景，右对齐，等宽字体，焦点时带有紫色 Halo 阴影。
-- **动作按钮**：`height: 48px`，强阴影，明显的点击反馈。
+### 5. 色彩动力学 (Theme Dynamics)
+- **非纯黑原则**：在暗色模式下，背景应使用极深的灰色（如 `#0c0c0e`）而非纯黑 (`#000000`)。这能减少屏幕发光带来的视觉疲劳（散光友好型设计）。
+- **半透明层级 (The Blur Layer)**：
+    - 在浮动工具栏或覆盖层使用 `backdrop-filter: blur`。这不仅是为了美观，更是为了保持当前操作与背景上下文的视觉联系。
 
-### 3.3 历史抽屉 (History Drawer)
-- **交互**：右侧平滑滑入 (`translateX`)，自带半透明遮罩。
-- **管理**：支持实时搜索过滤、单条滑动/悬浮删除、一键确认清空。
-
-## 4. 国际化策略 (Internationalization)
-- **双语支持**：内置 `I18N` 字典（EN/ZH），支持 UI 全量切换。
-- **术语去工程化**：使用用户友好的词汇，如 `Internal Engine` 而非 `local`, `Side-by-Side` 而非 `bilingual`。
-
-## 5. 交互动效 (Motion)
-- **进入动画**：Modal 使用 `Scale Fade-in` (0.2s)，Drawer 使用 `Slide-in` (0.3s)。
-- **微反馈**：按钮点击时 `scale(0.98)`，切换开关平滑滚动。
-- **字体响应**：支持 `12px - 26px` 全动态缩放，布局通过相对单位自动适配。
+---
+*这套方法论的目标是：让工具在不需要时消失，在需要时以最直接、最优雅的方式出现。*
