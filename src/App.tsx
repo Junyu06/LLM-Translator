@@ -103,6 +103,12 @@ const I18N = {
 interface ExtendedConfig extends AppConfig { theme?: "light" | "dark" | "system"; ui_lang?: "en" | "zh"; }
 const LANGUAGES = ["auto", "zh", "en", "ja", "ko", "fr", "de", "es", "ru"];
 
+const truncate = (text: string | undefined | null, maxLen: number) => {
+  if (!text) return "";
+  const clean = text.toString().replace(/\n/g, " ");
+  return clean.length > maxLen ? clean.substring(0, maxLen) + "..." : clean;
+};
+
 const defaultConfig: ExtendedConfig = {
   source_lang: "auto",
   target_lang: "zh",
@@ -235,7 +241,11 @@ export default function App() {
     await saveConfig(patch as any);
   };
 
-  const filteredHistory = history.filter(i => i.source.toLowerCase().includes(searchTerm.toLowerCase()) || i.target.toLowerCase().includes(searchTerm.toLowerCase()));
+  const filteredHistory = (history || []).filter(i => {
+    if (!i || !i.source || !i.target) return false;
+    const term = (searchTerm || "").toLowerCase();
+    return i.source.toLowerCase().includes(term) || i.target.toLowerCase().includes(term);
+  });
 
   return (
     <div className="app-container" style={{ fontSize: `${config.font_size}px` }}>
@@ -300,72 +310,76 @@ export default function App() {
               <button className="icon-btn" onClick={() => setShowSettings(false)}><IconX /></button>
             </div>
             
-            <div className="settings-section">
-              <div className="section-label">{t("engine")}</div>
-              <div className="settings-list">
-                <div className="settings-row">
-                  <div className="settings-info"><div className="settings-name">{t("inference")}</div></div>
-                  <div className="segmented-control">
-                    <button className={`segment-btn ${config.mode === "local" ? "active" : ""}`} onClick={() => updateConfig({ mode: "local" })}>{t("internal")}</button>
-                    <button className={`segment-btn ${config.mode === "http" ? "active" : ""}`} onClick={() => updateConfig({ mode: "http" })}>{t("external")}</button>
-                  </div>
-                </div>
-                <div className="settings-row">
-                  <div className="settings-info"><div className="settings-name">{t("model")}</div><div className="settings-desc">{t("model_desc")}</div></div>
-                  <div className="settings-input-wrapper"><input className="settings-input" value={config.model} onChange={e => updateConfig({ model: e.target.value })} /></div>
-                </div>
-                {config.mode === "http" && (
+            <div className="settings-body">
+              <div className="settings-section">
+                <div className="section-label">{t("engine")}</div>
+                <div className="settings-list">
                   <div className="settings-row">
-                    <div className="settings-info"><div className="settings-name">{t("host")}</div><div className="settings-desc">{t("host_desc")}</div></div>
-                    <div className="settings-input-wrapper"><input className="settings-input" value={config.host} onChange={e => updateConfig({ host: e.target.value })} /></div>
+                    <div className="settings-info"><div className="settings-name">{t("inference")}</div></div>
+                    <div className="segmented-control">
+                      <button className={`segment-btn ${config.mode === "local" ? "active" : ""}`} onClick={() => updateConfig({ mode: "local" })}>{t("internal")}</button>
+                      <button className={`segment-btn ${config.mode === "http" ? "active" : ""}`} onClick={() => updateConfig({ mode: "http" })}>{t("external")}</button>
+                    </div>
                   </div>
-                )}
+                  <div className="settings-row">
+                    <div className="settings-info"><div className="settings-name">{t("model")}</div><div className="settings-desc">{t("model_desc")}</div></div>
+                    <div className="settings-input-wrapper"><input className="settings-input" value={config.model} onChange={e => updateConfig({ model: e.target.value })} /></div>
+                  </div>
+                  {config.mode === "http" && (
+                    <div className="settings-row">
+                      <div className="settings-info"><div className="settings-name">{t("host")}</div><div className="settings-desc">{t("host_desc")}</div></div>
+                      <div className="settings-input-wrapper"><input className="settings-input" value={config.host} onChange={e => updateConfig({ host: e.target.value })} /></div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="settings-section">
+                <div className="section-label">{t("style")}</div>
+                <div className="settings-list">
+                  <div className="settings-row">
+                    <div className="settings-info"><div className="settings-name">{t("appearance")}</div></div>
+                    <div className="segmented-control">
+                      <button className={`segment-btn ${config.theme === "light" ? "active" : ""}`} onClick={() => updateConfig({ theme: "light" })}>{t("light")}</button>
+                      <button className={`segment-btn ${config.theme === "dark" ? "active" : ""}`} onClick={() => updateConfig({ theme: "dark" })}>{t("dark")}</button>
+                      <button className={`segment-btn ${config.theme === "system" ? "active" : ""}`} onClick={() => updateConfig({ theme: "system" })}>{t("system")}</button>
+                    </div>
+                  </div>
+                  <div className="settings-row">
+                    <div className="settings-info"><div className="settings-name">{t("ui_lang")}</div></div>
+                    <div className="segmented-control">
+                      <button className={`segment-btn ${config.ui_lang === "en" ? "active" : ""}`} onClick={() => updateConfig({ ui_lang: "en" })}>English</button>
+                      <button className={`segment-btn ${config.ui_lang === "zh" ? "active" : ""}`} onClick={() => updateConfig({ ui_lang: "zh" })}>简体中文</button>
+                    </div>
+                  </div>
+                  <div className="settings-row">
+                    <div className="settings-info"><div className="settings-name">{t("font_size")}</div></div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <input type="range" min="12" max="26" value={config.font_size} onChange={e => updateConfig({ font_size: parseInt(e.target.value) })} onPointerDown={() => setIsSizingFont(true)} onPointerUp={() => setIsSizingFont(false)} style={{ width: 100, accentColor: "var(--bg-accent)" }} />
+                      <span style={{ fontSize: "0.85rem", fontWeight: 800 }}>{config.font_size}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="settings-section">
+                <div className="section-label">{t("features")}</div>
+                <div className="settings-list">
+                  <div className="settings-row">
+                    <div className="settings-info"><div className="settings-name">{t("bilingual")}</div><div className="settings-desc">{t("bilingual_desc")}</div></div>
+                    <Toggle checked={config.output_mode === "interleaved"} onChange={v => updateConfig({ output_mode: v ? "interleaved" : "translations_only" })} />
+                  </div>
+                  <div className="settings-row">
+                    <div className="settings-info"><div className="settings-name">{t("context")}</div><div className="settings-desc">{t("context_desc")}</div></div>
+                    <Toggle checked={config.use_context} onChange={v => updateConfig({ use_context: v })} />
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="settings-section">
-              <div className="section-label">{t("style")}</div>
-              <div className="settings-list">
-                <div className="settings-row">
-                  <div className="settings-info"><div className="settings-name">{t("appearance")}</div></div>
-                  <div className="segmented-control">
-                    <button className={`segment-btn ${config.theme === "light" ? "active" : ""}`} onClick={() => updateConfig({ theme: "light" })}>{t("light")}</button>
-                    <button className={`segment-btn ${config.theme === "dark" ? "active" : ""}`} onClick={() => updateConfig({ theme: "dark" })}>{t("dark")}</button>
-                    <button className={`segment-btn ${config.theme === "system" ? "active" : ""}`} onClick={() => updateConfig({ theme: "system" })}>{t("system")}</button>
-                  </div>
-                </div>
-                <div className="settings-row">
-                  <div className="settings-info"><div className="settings-name">{t("ui_lang")}</div></div>
-                  <div className="segmented-control">
-                    <button className={`segment-btn ${config.ui_lang === "en" ? "active" : ""}`} onClick={() => updateConfig({ ui_lang: "en" })}>English</button>
-                    <button className={`segment-btn ${config.ui_lang === "zh" ? "active" : ""}`} onClick={() => updateConfig({ ui_lang: "zh" })}>简体中文</button>
-                  </div>
-                </div>
-                <div className="settings-row">
-                  <div className="settings-info"><div className="settings-name">{t("font_size")}</div></div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <input type="range" min="12" max="26" value={config.font_size} onChange={e => updateConfig({ font_size: parseInt(e.target.value) })} onPointerDown={() => setIsSizingFont(true)} onPointerUp={() => setIsSizingFont(false)} style={{ width: 100, accentColor: "var(--bg-accent)" }} />
-                    <span style={{ fontSize: "0.85rem", fontWeight: 800 }}>{config.font_size}</span>
-                  </div>
-                </div>
-              </div>
+            <div className="settings-footer">
+              <button className="primary-btn" style={{ width: "100%" }} onClick={() => setShowSettings(false)}>{t("done")}</button>
             </div>
-
-            <div className="settings-section">
-              <div className="section-label">{t("features")}</div>
-              <div className="settings-list">
-                <div className="settings-row">
-                  <div className="settings-info"><div className="settings-name">{t("bilingual")}</div><div className="settings-desc">{t("bilingual_desc")}</div></div>
-                  <Toggle checked={config.output_mode === "interleaved"} onChange={v => updateConfig({ output_mode: v ? "interleaved" : "translations_only" })} />
-                </div>
-                <div className="settings-row">
-                  <div className="settings-info"><div className="settings-name">{t("context")}</div><div className="settings-desc">{t("context_desc")}</div></div>
-                  <Toggle checked={config.use_context} onChange={v => updateConfig({ use_context: v })} />
-                </div>
-              </div>
-            </div>
-
-            <button className="primary-btn" style={{ width: "100%" }} onClick={() => setShowSettings(false)}>{t("done")}</button>
           </div>
         </div>
       )}
@@ -375,10 +389,12 @@ export default function App() {
         <div className="overlay-mask" onClick={() => setShowHistory(false)} style={{ justifyContent: "flex-end" }}>
           <div className="drawer-card" onClick={e => e.stopPropagation()}>
             <div className="drawer-header">
-              <div className="drawer-top-row">
-                <h2 className="settings-title">{t("history")}</h2>
+              <div className="drawer-top-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                <h2 className="settings-title" style={{ margin: 0 }}>{t("history")}</h2>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                   <button className="danger-text" onClick={() => { if(confirm(t("confirm_clear"))) setHistory([]); }}>{t("clear")}</button>
+                   <button className="secondary-btn-sm" onClick={() => { if(confirm(t("confirm_clear"))) setHistory([]); }}>
+                     <IconTrash /> {t("clear")}
+                   </button>
                    <button className="icon-btn" onClick={() => setShowHistory(false)}><IconX /></button>
                 </div>
               </div>
@@ -394,10 +410,12 @@ export default function App() {
                 filteredHistory.map(item => (
                   <div key={item.id} className="history-item" onClick={() => { setInput(item.source); setOutput(item.target); setShowHistory(false); }}>
                     <div className="history-content">
-                      <div className="history-source">{item.source}</div>
-                      <div className="history-target">{item.target}</div>
+                      <div className="history-source">{truncate(item.source, 20)}</div>
+                      <div className="history-target">{truncate(item.target, 20)}</div>
                     </div>
-                    <button className="history-delete-btn" onClick={(e) => { e.stopPropagation(); setHistory(h => h.filter(i => i.id !== item.id)); }}><IconTrash /></button>
+                    <div className="history-actions">
+                      <button className="history-delete-btn" onClick={(e) => { e.stopPropagation(); setHistory(h => h.filter(i => i.id !== item.id)); }}><IconTrash /></button>
+                    </div>
                   </div>
                 ))
               )}
