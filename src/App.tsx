@@ -103,10 +103,9 @@ const I18N = {
 interface ExtendedConfig extends AppConfig { theme?: "light" | "dark" | "system"; ui_lang?: "en" | "zh"; }
 const LANGUAGES = ["auto", "zh", "en", "ja", "ko", "fr", "de", "es", "ru"];
 
-const truncate = (text: string | undefined | null, maxLen: number) => {
+const cleanText = (text: string | undefined | null) => {
   if (!text) return "";
-  const clean = text.toString().replace(/\n/g, " ");
-  return clean.length > maxLen ? clean.substring(0, maxLen) + "..." : clean;
+  return text.toString().replace(/\n/g, " ");
 };
 
 const defaultConfig: ExtendedConfig = {
@@ -148,6 +147,8 @@ export default function App() {
   
   const currentJobIdRef = useRef<number | null>(null);
   const runTranslationRef = useRef<(text: string) => void>();
+  const historyListRef = useRef<HTMLDivElement>(null);
+  const historyScrollRef = useRef(0);
   const t = (key: keyof typeof I18N.en) => I18N[config.ui_lang || "en"][key];
   const langName = (code: string) => LANG_MAP[config.ui_lang || "en"][code] || code.toUpperCase();
 
@@ -181,6 +182,17 @@ export default function App() {
   useEffect(() => {
     if (isTauriRuntime()) void syncHotkeyListener();
   }, [config.hotkey_enabled]);
+
+  useEffect(() => {
+    if (showHistory && historyListRef.current) {
+      historyListRef.current.scrollTop = historyScrollRef.current;
+    }
+  }, [showHistory]);
+
+  const closeHistory = () => {
+    if (historyListRef.current) historyScrollRef.current = historyListRef.current.scrollTop;
+    setShowHistory(false);
+  };
 
   const addToHistory = (source: string, target: string) => {
     if (!source.trim() || !target.trim()) return;
@@ -386,7 +398,7 @@ export default function App() {
 
       {/* --- HISTORY --- */}
       {showHistory && (
-        <div className="overlay-mask" onClick={() => setShowHistory(false)} style={{ justifyContent: "flex-end" }}>
+        <div className="overlay-mask" onClick={closeHistory} style={{ justifyContent: "flex-end" }}>
           <div className="drawer-card" onClick={e => e.stopPropagation()}>
             <div className="drawer-header">
               <div className="drawer-top-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -395,7 +407,7 @@ export default function App() {
                    <button className="secondary-btn-sm" onClick={() => { if(confirm(t("confirm_clear"))) setHistory([]); }}>
                      <IconTrash /> {t("clear")}
                    </button>
-                   <button className="icon-btn" onClick={() => setShowHistory(false)}><IconX /></button>
+                   <button className="icon-btn" onClick={closeHistory}><IconX /></button>
                 </div>
               </div>
               <div className="history-search-container">
@@ -403,15 +415,15 @@ export default function App() {
                 <input className="history-search-input" placeholder={t("search")} value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
               </div>
             </div>
-            <div className="history-list">
+            <div className="history-list" ref={historyListRef}>
               {filteredHistory.length === 0 ? (
                 <div style={{ color: "var(--fg-subtle)", textAlign: "center", marginTop: 40, fontSize: "0.875rem" }}>{searchTerm ? "No matches." : t("empty_history")}</div>
               ) : (
                 filteredHistory.map(item => (
-                  <div key={item.id} className="history-item" onClick={() => { setInput(item.source); setOutput(item.target); setShowHistory(false); }}>
+                  <div key={item.id} className="history-item" onClick={() => { setInput(item.source); setOutput(item.target); closeHistory(); }}>
                     <div className="history-content">
-                      <div className="history-source">{truncate(item.source, 20)}</div>
-                      <div className="history-target">{truncate(item.target, 20)}</div>
+                      <div className="history-source">{cleanText(item.source)}</div>
+                      <div className="history-target">{cleanText(item.target)}</div>
                     </div>
                     <div className="history-actions">
                       <button className="history-delete-btn" onClick={(e) => { e.stopPropagation(); setHistory(h => h.filter(i => i.id !== item.id)); }}><IconTrash /></button>
