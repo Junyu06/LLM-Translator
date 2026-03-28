@@ -430,10 +430,12 @@ fn build_tray(app: &AppHandle) -> Result<(), String> {
     )
     .map_err(|error| format!("Failed to create tray menu: {error}"))?;
 
-    let mut builder = TrayIconBuilder::with_id("translator-tray").menu(&menu);
-    if let Some(icon) = app.default_window_icon().cloned() {
-        builder = builder.icon(icon);
-    }
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray_icon.png"))
+        .map_err(|error| format!("Failed to load tray icon: {error}"))?;
+    let mut builder = TrayIconBuilder::with_id("translator-tray")
+        .menu(&menu)
+        .icon(tray_icon)
+        .icon_as_template(true);
 
     builder
         .show_menu_on_left_click(false)
