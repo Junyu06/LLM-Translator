@@ -1,3 +1,5 @@
+export type HistoryItem = { id: string; source: string; target: string; timestamp: number };
+
 export type AppConfig = {
   source_lang: string;
   target_lang: string;

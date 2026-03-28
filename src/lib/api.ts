@@ -42,13 +42,14 @@ async function invokeJson<T>(command: string, payload?: unknown): Promise<T> {
     return JSON.parse(raw) as T;
   } catch (error) {
     if (typeof error === "string") {
+      let parsed: BridgeError | undefined;
       try {
-        const parsed = JSON.parse(error) as BridgeError;
-        if (parsed.error) {
-          throw new Error(parsed.python ? `${parsed.error} (${parsed.python})` : parsed.error);
-        }
+        parsed = JSON.parse(error) as BridgeError;
       } catch {
         throw new Error(error);
+      }
+      if (parsed?.error) {
+        throw new Error(parsed.python ? `${parsed.error} (${parsed.python})` : parsed.error);
       }
     }
     throw error;
@@ -196,6 +197,11 @@ export async function runClipboardOcr(): Promise<string> {
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+export async function notifyFrontendReady(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await invokeVoid("frontend_ready");
 }
 
 export async function waitForBackend(timeoutMs = 12000) {

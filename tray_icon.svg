@@ -1,0 +1,12 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Back Pane (Wireframe) -->
+  <rect x="4" y="4" width="16" height="16" rx="3" stroke="currentColor" stroke-width="2.5"/>
+  
+  <!-- Front Pane (Masked to show overlap) -->
+  <!-- We use a white background to "cut" the back rectangle, then draw the front outline -->
+  <rect x="12" y="12" width="16" height="16" rx="3" fill="var(--tray-bg, white)"/> 
+  <rect x="12" y="12" width="16" height="16" rx="3" stroke="currentColor" stroke-width="2.5"/>
+  
+  <!-- The Bridge Arrow (Identical to main icon's motion) -->
+  <path d="M16 20L20 16M20 16H16.5M20 16V19.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

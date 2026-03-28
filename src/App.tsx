@@ -1,11 +1,10 @@
-import { ClipboardEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  cancelTranslation,
   isTauriRuntime,
+  notifyFrontendReady,
   readClipboardText,
   runClipboardOcr,
   saveConfig,
-  showMainWindow,
   startTranslationStream,
   syncHotkeyListener,
   takeTranslationEvents,
@@ -13,18 +12,9 @@ import {
   waitForBackend,
   writeClipboardText
 } from "./lib/api";
-import type { AppConfig, TranslationRequest, TranslationResponse } from "./types";
+import type { AppConfig, HistoryItem, TranslationRequest, TranslationResponse } from "./types";
+import { IconCopy, IconHistory, IconMagic, IconSearch, IconSettings, IconSwap, IconTrash, IconX } from "./icons";
 import "./styles.css";
-
-// --- Icons ---
-const IconSwap = () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m7 16 3-3-3-3"/><path d="m17 8-3 3 3 3"/><path d="M3 12h7"/><path d="M14 12h7"/></svg>;
-const IconCopy = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>;
-const IconTrash = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1-0 2 1 2 2v2"/></svg>;
-const IconMagic = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>;
-const IconSettings = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>;
-const IconX = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>;
-const IconHistory = () => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>;
-const IconSearch = () => <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>;
 
 // --- i18n & Lang Mapping ---
 const LANG_MAP: Record<string, Record<string, string>> = {
@@ -110,7 +100,6 @@ const I18N = {
 };
 
 // --- Types ---
-type HistoryItem = { id: string; source: string; target: string; timestamp: number };
 interface ExtendedConfig extends AppConfig { theme?: "light" | "dark" | "system"; ui_lang?: "en" | "zh"; }
 const LANGUAGES = ["auto", "zh", "en", "ja", "ko", "fr", "de", "es", "ru"];
 
@@ -151,19 +140,40 @@ export default function App() {
   });
   
   const currentJobIdRef = useRef<number | null>(null);
+  const runTranslationRef = useRef<(text: string) => void>();
   const t = (key: keyof typeof I18N.en) => I18N[config.ui_lang || "en"][key];
   const langName = (code: string) => LANG_MAP[config.ui_lang || "en"][code] || code.toUpperCase();
+
+  // Hotkey bridge: Rust evals window.__translatorTriggerClipboardTranslation(text)
+  useEffect(() => {
+    (globalThis as any).__translatorTriggerClipboardTranslation = (text?: string) => {
+      if (text) {
+        runTranslationRef.current?.(text);
+      } else {
+        readClipboardText().then(clipText => { if (clipText) runTranslationRef.current?.(clipText); }).catch(console.error);
+      }
+    };
+    return () => { delete (globalThis as any).__translatorTriggerClipboardTranslation; };
+  }, []);
 
   useEffect(() => {
     void waitForBackend().then(({ config: savedConfig }) => {
       const merged = { ...defaultConfig, ...savedConfig };
       setConfig(merged);
-      setStatus(t("ready"));
+      setStatus(I18N[merged.ui_lang || "en"]["ready"]);
       document.body.setAttribute("data-theme", merged.theme || "system");
+      if (isTauriRuntime()) {
+        void notifyFrontendReady();
+        void syncHotkeyListener();
+      }
     }).catch((err) => setStatus(`Error: ${err.message}`));
   }, []);
 
   useEffect(() => { localStorage.setItem("translator_history_v2", JSON.stringify(history)); }, [history]);
+
+  useEffect(() => {
+    if (isTauriRuntime()) void syncHotkeyListener();
+  }, [config.hotkey_enabled]);
 
   const addToHistory = (source: string, target: string) => {
     if (!source.trim() || !target.trim()) return;
@@ -171,10 +181,22 @@ export default function App() {
     setHistory(prev => [newItem, ...prev.filter(i => i.source !== source.trim()).slice(0, 99)]);
   };
 
+  runTranslationRef.current = (text: string) => { void runTranslation(text); };
+
   const runTranslation = async (text: string) => {
     if (!text.trim() || isSubmitting) return;
     setInput(text); setOutput(""); setIsSubmitting(true); setProgressRatio(0);
-    const request: TranslationRequest = { text, ...config };
+    const request: TranslationRequest = {
+      text,
+      source_lang: config.source_lang,
+      target_lang: config.target_lang,
+      use_context: config.use_context,
+      collapse_newlines: config.collapse_newlines,
+      output_mode: config.output_mode,
+      mode: config.mode,
+      host: config.host,
+      model: config.model,
+    };
     if (isTauriRuntime()) {
       try {
         const jobId = await startTranslationStream(request);
@@ -247,7 +269,7 @@ export default function App() {
           {isSubmitting && <div className="progress-container"><div className="progress-bar" style={{ width: `${progressRatio}%` }} /></div>}
           <div className="panel-header">
             <span className="panel-label">{t("translation")}</span>
-            <button className="icon-btn" onClick={async () => { await writeClipboardText(output); setStatus(t("copied")); setTimeout(() => setStatus(t("done")), 2000); }} disabled={!output}><IconCopy /></button>
+            <button className="icon-btn" onClick={async () => { try { await writeClipboardText(output); setStatus(t("copied")); setTimeout(() => setStatus(t("done")), 2000); } catch (err: any) { setStatus(`Copy Error: ${err.message}`); } }} disabled={!output}><IconCopy /></button>
           </div>
           <div className="editor-content output-content">
             {output || <span style={{ color: "var(--fg-subtle)" }}>{t("ready")}...</span>}
@@ -256,7 +278,7 @@ export default function App() {
       </main>
 
       <div className="floating-toolbar">
-        <button className="icon-btn" onClick={async () => { setStatus("OCR..."); const text = await runClipboardOcr(); if (text) runTranslation(text); else setStatus("No text"); }}><IconMagic /></button>
+        <button className="icon-btn" onClick={async () => { setStatus("OCR..."); try { const text = await runClipboardOcr(); if (text) runTranslation(text); else setStatus("No text"); } catch (err: any) { setStatus(`OCR Error: ${err.message}`); } }}><IconMagic /></button>
         <div style={{ width: 1, background: "var(--border-medium)", margin: "4px 0" }} />
         <button className="primary-btn" disabled={isSubmitting || !input.trim()} onClick={() => runTranslation(input)}>
           {isSubmitting ? "Translating..." : "Translate"}
@@ -284,14 +306,14 @@ export default function App() {
                   <div className="settings-info"><div className="settings-name">{t("inference")}</div></div>
                   <div className="segmented-control">
                     <button className={`segment-btn ${config.mode === "local" ? "active" : ""}`} onClick={() => updateConfig({ mode: "local" })}>{t("internal")}</button>
-                    <button className={`segment-btn ${config.mode === "ollama" ? "active" : ""}`} onClick={() => updateConfig({ mode: "ollama" })}>{t("external")}</button>
+                    <button className={`segment-btn ${config.mode === "http" ? "active" : ""}`} onClick={() => updateConfig({ mode: "http" })}>{t("external")}</button>
                   </div>
                 </div>
                 <div className="settings-row">
                   <div className="settings-info"><div className="settings-name">{t("model")}</div><div className="settings-desc">{t("model_desc")}</div></div>
                   <div className="settings-input-wrapper"><input className="settings-input" value={config.model} onChange={e => updateConfig({ model: e.target.value })} /></div>
                 </div>
-                {config.mode === "ollama" && (
+                {config.mode === "http" && (
                   <div className="settings-row">
                     <div className="settings-info"><div className="settings-name">{t("host")}</div><div className="settings-desc">{t("host_desc")}</div></div>
                     <div className="settings-input-wrapper"><input className="settings-input" value={config.host} onChange={e => updateConfig({ host: e.target.value })} /></div>
@@ -333,7 +355,7 @@ export default function App() {
               <div className="settings-list">
                 <div className="settings-row">
                   <div className="settings-info"><div className="settings-name">{t("bilingual")}</div><div className="settings-desc">{t("bilingual_desc")}</div></div>
-                  <Toggle checked={config.output_mode === "bilingual"} onChange={v => updateConfig({ output_mode: v ? "bilingual" : "translations_only" })} />
+                  <Toggle checked={config.output_mode === "interleaved"} onChange={v => updateConfig({ output_mode: v ? "interleaved" : "translations_only" })} />
                 </div>
                 <div className="settings-row">
                   <div className="settings-info"><div className="settings-name">{t("context")}</div><div className="settings-desc">{t("context_desc")}</div></div>
