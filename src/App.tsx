@@ -53,7 +53,8 @@ const I18N = {
     search: "Search history...",
     empty_history: "No translations found.",
     confirm_clear: "Purge all history?",
-    placeholder: "Type or paste text here...",
+    cancel: "Cancel",
+    placeholder: "Type, paste text or image...",
     internal: "Internal",
     external: "Ollama",
     light: "Light",
@@ -90,7 +91,8 @@ const I18N = {
     search: "搜索历史...",
     empty_history: "暂无历史记录。",
     confirm_clear: "确定清空所有记录？",
-    placeholder: "在此输入或粘贴文本...",
+    cancel: "取消",
+    placeholder: "输入、粘贴文本或图片...",
     internal: "内置引擎",
     external: "Ollama",
     light: "亮色",
@@ -138,8 +140,10 @@ export default function App() {
   const [progressRatio, setProgressRatio] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [isSizingFont, setIsSizingFont] = useState(false);
+  const [segments, setSegments] = useState<Array<{ source: string; target: string }>>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [confirmClear, setConfirmClear] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>(() => {
     const saved = localStorage.getItem("translator_history_v2");
     return saved ? JSON.parse(saved) : [];
@@ -192,6 +196,7 @@ export default function App() {
   const closeHistory = () => {
     if (historyListRef.current) historyScrollRef.current = historyListRef.current.scrollTop;
     setShowHistory(false);
+    setConfirmClear(false);
   };
 
   const addToHistory = (source: string, target: string) => {
@@ -204,14 +209,14 @@ export default function App() {
 
   const runTranslation = async (text: string) => {
     if (!text.trim() || isSubmitting) return;
-    setInput(text); setOutput(""); setIsSubmitting(true); setProgressRatio(0);
+    setInput(text); setOutput(""); setSegments([]); setIsSubmitting(true); setProgressRatio(0);
     const request: TranslationRequest = {
       text,
       source_lang: config.source_lang,
       target_lang: config.target_lang,
       use_context: config.use_context,
       collapse_newlines: config.collapse_newlines,
-      output_mode: config.output_mode,
+      output_mode: "translations_only",
       mode: config.mode,
       host: config.host,
       model: config.model,
@@ -226,18 +231,32 @@ export default function App() {
     }
     try {
       const resp = await translate(request);
-      setOutput(resp.output_text); addToHistory(text, resp.output_text); setStatus(t("done"));
+      setOutput(resp.output_text); 
+      if (resp.segments) setSegments(resp.segments);
+      addToHistory(text, resp.output_text); 
+      setStatus(t("done"));
     } catch (err: any) { setStatus(`Error: ${err.message}`); } finally { setIsSubmitting(false); setProgressRatio(100); }
   };
 
   const pollProgress = async (jobId: number, sourceText: string) => {
     let finalOutput = "";
+    let doneSegs: { source: string; target: string }[] = [];
     while (currentJobIdRef.current === jobId) {
       const events = await takeTranslationEvents<any>(jobId);
       for (const ev of events) {
         if (ev.event === "update" || ev.event === "completed") {
           if (ev.output_text) { setOutput(ev.output_text); finalOutput = ev.output_text; }
           if (ev.total_segments) setProgressRatio((ev.completed_segments / ev.total_segments) * 100);
+          // Real-time bilingual segment tracking
+          if (ev.active_segment_source) {
+            const status = ev.segment_status;
+            if (status === "completed" || status === "passthrough") {
+              doneSegs = [...doneSegs, { source: ev.active_segment_source, target: ev.active_segment_target }];
+              setSegments(doneSegs);
+            } else if (status === "streaming") {
+              setSegments([...doneSegs, { source: ev.active_segment_source, target: ev.active_segment_target }]);
+            }
+          }
         }
         if (ev.event === "completed") { setIsSubmitting(false); currentJobIdRef.current = null; setStatus(t("done")); addToHistory(sourceText, finalOutput); }
         if (ev.event === "error" || ev.event === "canceled") { setIsSubmitting(false); currentJobIdRef.current = null; setStatus(ev.message || "Failed"); }
@@ -259,6 +278,28 @@ export default function App() {
     return i.source.toLowerCase().includes(term) || i.target.toLowerCase().includes(term);
   });
 
+  const handlePaste = async (e: React.ClipboardEvent) => {
+    const items = e.clipboardData.items;
+    let hasImage = false;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf("image") !== -1) {
+        hasImage = true;
+        break;
+      }
+    }
+    if (hasImage) {
+      e.preventDefault();
+      setStatus("OCR...");
+      try {
+        const text = await runClipboardOcr();
+        if (text) runTranslation(text);
+        else setStatus("No text found in image");
+      } catch (err: any) {
+        setStatus(`OCR Error: ${err.message}`);
+      }
+    }
+  };
+
   return (
     <div className="app-container" style={{ fontSize: `${config.font_size}px` }}>
       <nav className="app-nav">
@@ -267,7 +308,7 @@ export default function App() {
           <select className="lang-select" value={config.source_lang} onChange={e => updateConfig({ source_lang: e.target.value })}>
             {LANGUAGES.map(l => <option key={l} value={l}>{langName(l)}</option>)}
           </select>
-          <button className="icon-btn" onClick={() => updateConfig({ source_lang: config.target_lang, target_lang: config.source_lang })} disabled={config.source_lang === "auto"}><IconSwap /></button>
+          <button className="icon-btn" onClick={() => { updateConfig({ source_lang: config.target_lang, target_lang: config.source_lang }); setInput(output); setOutput(input); setSegments([]); }} disabled={config.source_lang === "auto"}><IconSwap /></button>
           <select className="lang-select" value={config.target_lang} onChange={e => updateConfig({ target_lang: e.target.value })}>
             {LANGUAGES.filter(l => l !== "auto").map(l => <option key={l} value={l}>{langName(l)}</option>)}
           </select>
@@ -285,7 +326,7 @@ export default function App() {
             <button className="icon-btn" onClick={() => { setInput(""); setOutput(""); }}><IconTrash /></button>
           </div>
           <div className="editor-content">
-            <textarea placeholder={t("placeholder")} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runTranslation(input); }} />
+            <textarea placeholder={t("placeholder")} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runTranslation(input); }} onPaste={async (e) => { const items = e.clipboardData?.items; if (!items) return; for (let i = 0; i < items.length; i++) { if (items[i].type.startsWith("image/")) { e.preventDefault(); setStatus("OCR..."); try { const text = await runClipboardOcr(); if (text) runTranslation(text); else setStatus("No text"); } catch (err: any) { setStatus(`OCR Error: ${err.message}`); } return; } } }} />
           </div>
         </section>
         <section className="editor-panel">
@@ -295,14 +336,25 @@ export default function App() {
             <button className="icon-btn" onClick={async () => { try { await writeClipboardText(output); setStatus(t("copied")); setTimeout(() => setStatus(t("done")), 2000); } catch (err: any) { setStatus(`Copy Error: ${err.message}`); } }} disabled={!output}><IconCopy /></button>
           </div>
           <div className="editor-content output-content">
-            {output || <span style={{ color: "var(--fg-subtle)" }}>{t("ready")}...</span>}
+            {config.output_mode === "interleaved" && segments.length > 0 ? (
+              <div className="bilingual-viewer">
+                {segments.map((seg, i) => (
+                  <div key={i} className="bilingual-segment">
+                    <div className="segment-source">{seg.source}</div>
+                    <div className="segment-target">{seg.target}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              output || <span style={{ color: "var(--fg-subtle)" }}>{t("ready")}...</span>
+            )}
           </div>
         </section>
       </main>
 
       <div className="floating-toolbar">
         <button className="icon-btn" onClick={async () => { setStatus("OCR..."); try { const text = await runClipboardOcr(); if (text) runTranslation(text); else setStatus("No text"); } catch (err: any) { setStatus(`OCR Error: ${err.message}`); } }}><IconMagic /></button>
-        <div style={{ width: 1, background: "var(--border-medium)", margin: "4px 0" }} />
+        <div style={{ width: 1, alignSelf: "stretch", background: "var(--border-medium)", margin: "4px 0" }} />
         <button className="primary-btn" disabled={isSubmitting || !input.trim()} onClick={() => runTranslation(input)}>
           {isSubmitting ? "Translating..." : "Translate"}
           <span style={{ fontSize: "0.7rem", opacity: 0.6, marginLeft: 4 }}>⌘↵</span>
@@ -404,9 +456,16 @@ export default function App() {
               <div className="drawer-top-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
                 <h2 className="settings-title" style={{ margin: 0 }}>{t("history")}</h2>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                   <button className="secondary-btn-sm" onClick={() => { if(confirm(t("confirm_clear"))) setHistory([]); }}>
-                     <IconTrash /> {t("clear")}
-                   </button>
+                   {confirmClear ? (
+                     <>
+                       <button className="secondary-btn-sm danger-btn" onClick={() => { setHistory([]); setConfirmClear(false); }}>{t("confirm_clear")}</button>
+                       <button className="secondary-btn-sm" onClick={() => setConfirmClear(false)}>{t("cancel")}</button>
+                     </>
+                   ) : (
+                     <button className="secondary-btn-sm" onClick={() => setConfirmClear(true)}>
+                       <IconTrash /> {t("clear")}
+                     </button>
+                   )}
                    <button className="icon-btn" onClick={closeHistory}><IconX /></button>
                 </div>
               </div>

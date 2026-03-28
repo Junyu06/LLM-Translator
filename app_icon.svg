@@ -1,19 +1,21 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- macOS Style Squircle Background -->
-  <rect width="1024" height="1024" rx="220" fill="url(#paint0_linear)"/>
-  
-  <!-- Glossy Overlay -->
-  <path d="M220 0H804C925.503 0 1024 98.4974 1024 220V512C1024 220 804 220 512 220C220 220 0 220 0 512V220C0 98.4974 98.4974 0 220 0Z" fill="white" fill-opacity="0.05"/>
+  <g transform="translate(102, 102) scale(0.8)">
+    <!-- macOS Style Squircle Background -->
+    <rect width="1024" height="1024" rx="220" fill="url(#paint0_linear)"/>
 
-  <!-- The Interlocking Glyph -->
-  <!-- Layer 1: Translucent Source Pane -->
-  <rect x="280" y="280" width="380" height="380" rx="60" fill="white" fill-opacity="0.2"/>
-  
-  <!-- Layer 2: Solid Target Pane -->
-  <rect x="364" y="364" width="380" height="380" rx="60" fill="white" shadow="url(#shadow)"/>
-  
-  <!-- Connection Bridge (The Arrow) -->
-  <path d="M480 554L554 480M554 480H490M554 480V544" stroke="#6366F1" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Glossy Overlay -->
+    <path d="M220 0H804C925.503 0 1024 98.4974 1024 220V512C1024 220 804 220 512 220C220 220 0 220 0 512V220C0 98.4974 98.4974 0 220 0Z" fill="white" fill-opacity="0.05"/>
+
+    <!-- The Interlocking Glyph -->
+    <!-- Layer 1: Translucent Source Pane -->
+    <rect x="280" y="280" width="380" height="380" rx="60" fill="white" fill-opacity="0.2"/>
+
+    <!-- Layer 2: Solid Target Pane -->
+    <rect x="364" y="364" width="380" height="380" rx="60" fill="white" shadow="url(#shadow)"/>
+
+    <!-- Connection Bridge (The Arrow) -->
+    <path d="M480 554L554 480M554 480H490M554 480V544" stroke="#6366F1" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
 
   <defs>
     <linearGradient id="paint0_linear" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">

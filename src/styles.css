@@ -79,22 +79,66 @@ body { margin: 0; padding: 0; font-family: var(--font-sans); background: var(--b
 textarea { width: 100%; height: 100%; border: none; background: transparent; color: var(--fg-main); font-family: var(--font-sans); font-size: 1em; line-height: 1.6; resize: none; outline: none; padding: 0; }
 .output-content { flex: 1; font-size: 1em; line-height: 1.6; color: var(--fg-main); overflow-y: auto; white-space: pre-wrap; word-break: break-word; min-height: 0; }
 
+/* Bilingual Viewer */
+.bilingual-viewer { display: flex; flex-direction: column; gap: 24px; padding-top: 8px; }
+.bilingual-segment { display: flex; flex-direction: column; gap: 8px; position: relative; }
+
+.segment-source { 
+  font-size: 0.85em; 
+  color: var(--fg-muted); 
+  background: var(--bg-app);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+  line-height: 1.5;
+  position: relative;
+}
+.segment-source::before {
+  content: "SOURCE";
+  position: absolute;
+  top: -8px;
+  left: 8px;
+  font-size: 10px;
+  font-weight: 800;
+  background: var(--bg-surface);
+  padding: 0 4px;
+  color: var(--fg-subtle);
+  letter-spacing: 0.05em;
+}
+
+.segment-target { 
+  font-size: 1.05em; 
+  color: var(--fg-main); 
+  font-weight: 500; 
+  padding: 0 4px;
+  line-height: 1.6;
+}
+.segment-target::before {
+  content: "";
+  display: block;
+  width: 20px;
+  height: 2px;
+  background: var(--bg-accent-soft);
+  margin-bottom: 8px;
+  border-radius: var(--radius-full);
+}
+
 /* Floating Toolbar */
-.floating-toolbar { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%); background: var(--bg-surface); padding: 8px; border-radius: var(--radius-full); box-shadow: var(--shadow-float); border: 1px solid var(--border-medium); display: flex; gap: 8px; z-index: 100; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.floating-toolbar { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%); background: var(--bg-surface); padding: 8px; border-radius: var(--radius-full); box-shadow: var(--shadow-float); border: 1px solid var(--border-medium); display: flex; align-items: center; gap: 8px; z-index: 100; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
 
 /* Components */
-.icon-btn { 
-  width: 40px; 
-  height: 40px; 
-  border-radius: var(--radius-full); 
-  border: none; 
-  background: transparent; 
-  color: var(--fg-muted); 
-  display: flex; 
-  align-items: center; 
-  justify-content: center; 
-  cursor: pointer; 
-  transition: var(--transition-base); 
+.icon-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-full);
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: var(--transition-base);
   padding: 0;
   line-height: 0;
 }
@@ -132,6 +176,8 @@ textarea { width: 100%; height: 100%; border: none; background: transparent; col
   flex-shrink: 0;
 }
 .secondary-btn-sm:hover { background: var(--bg-accent-soft); color: var(--bg-accent); border-color: var(--bg-accent-soft); }
+.secondary-btn-sm.danger-btn { color: #ef4444; border-color: rgba(239,68,68,0.3); }
+.secondary-btn-sm.danger-btn:hover { background: rgba(239,68,68,0.1); color: #ef4444; border-color: rgba(239,68,68,0.5); }
 
 /* Settings Modal Refinement */
 .overlay-mask { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 1000; display: flex; align-items: center; justify-content: center; animation: fadeIn 0.2s ease-out; }

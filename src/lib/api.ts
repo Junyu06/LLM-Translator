@@ -174,13 +174,15 @@ export async function readClipboardText(): Promise<string> {
 }
 
 export async function writeClipboardText(text: string): Promise<void> {
-  if (isTauriRuntime()) {
-    await invokeVoid("write_clipboard_text", text);
+  // Web Clipboard API works in Tauri webview (with user gesture) and browser
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
     return;
   }
 
-  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
+  // Fallback: Tauri native bridge
+  if (isTauriRuntime()) {
+    await invokeVoid("write_clipboard_text", text);
     return;
   }
 
