@@ -132,6 +132,7 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [progressRatio, setProgressRatio] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
+  const [isSizingFont, setIsSizingFont] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [history, setHistory] = useState<HistoryItem[]>(() => {
@@ -292,8 +293,8 @@ export default function App() {
       </footer>
 
       {showSettings && (
-        <div className="overlay-mask" onClick={() => setShowSettings(false)}>
-          <div className="settings-card" onClick={e => e.stopPropagation()}>
+        <div className="overlay-mask" onClick={() => setShowSettings(false)} style={isSizingFont ? { backdropFilter: "none", WebkitBackdropFilter: "none" } : undefined}>
+          <div className="settings-card" onClick={e => e.stopPropagation()} style={isSizingFont ? { opacity: 0.25, transition: "opacity 0.1s" } : undefined}>
             <div className="settings-header">
               <h2 className="settings-title">{t("settings")}</h2>
               <button className="icon-btn" onClick={() => setShowSettings(false)}><IconX /></button>
@@ -343,7 +344,7 @@ export default function App() {
                 <div className="settings-row">
                   <div className="settings-info"><div className="settings-name">{t("font_size")}</div></div>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <input type="range" min="12" max="26" value={config.font_size} onChange={e => updateConfig({ font_size: parseInt(e.target.value) })} style={{ width: 100, accentColor: "var(--bg-accent)" }} />
+                    <input type="range" min="12" max="26" value={config.font_size} onChange={e => updateConfig({ font_size: parseInt(e.target.value) })} onPointerDown={() => setIsSizingFont(true)} onPointerUp={() => setIsSizingFont(false)} style={{ width: 100, accentColor: "var(--bg-accent)" }} />
                     <span style={{ fontSize: "0.85rem", fontWeight: 800 }}>{config.font_size}</span>
                   </div>
                 </div>

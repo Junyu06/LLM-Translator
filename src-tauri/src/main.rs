@@ -173,6 +173,13 @@ fn show_main_window(app: &AppHandle) -> Result<(), String> {
     window
         .show()
         .map_err(|error| format!("Failed to show main window: {error}"))?;
+
+    // Re-apply the app icon after dock visibility toggle; macOS may reset it.
+    #[cfg(target_os = "macos")]
+    if let Some(icon) = app.default_window_icon().cloned() {
+        let _ = window.set_icon(icon);
+    }
+
     window
         .set_focus()
         .map_err(|error| format!("Failed to focus main window: {error}"))?;
