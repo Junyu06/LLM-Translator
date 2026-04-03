@@ -766,6 +766,89 @@ fn run_clipboard_ocr() -> Result<String, String> {
     run_bridge("ocr-clipboard", None)
 }
 
+#[cfg(target_os = "macos")]
+fn ax_is_process_trusted(with_prompt: bool) -> bool {
+    use core_foundation::base::{CFTypeRef, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXIsProcessTrustedWithOptions(options: CFTypeRef) -> bool;
+    }
+
+    if !with_prompt {
+        return unsafe { AXIsProcessTrustedWithOptions(std::ptr::null()) };
+    }
+
+    let key = CFString::new("AXTrustedCheckOptionPrompt");
+    let value = CFBoolean::true_value();
+    let dict: CFDictionary<CFString, CFBoolean> =
+        CFDictionary::from_CFType_pairs(&[(key, value)]);
+    unsafe { AXIsProcessTrustedWithOptions(dict.as_CFTypeRef()) }
+}
+
+#[tauri::command]
+fn check_accessibility() -> bool {
+    #[cfg(target_os = "macos")]
+    return ax_is_process_trusted(false);
+    #[cfg(not(target_os = "macos"))]
+    return true;
+}
+
+#[tauri::command]
+fn request_accessibility() -> bool {
+    #[cfg(target_os = "macos")]
+    return ax_is_process_trusted(true);
+    #[cfg(not(target_os = "macos"))]
+    return true;
+}
+
+// kIOHIDRequestTypeListenEvent = 1
+// IOHIDCheckAccess return: 0 = unknown, 1 = granted, 2 = denied
+// IOHIDRequestAccess return: true if granted
+#[tauri::command]
+fn check_input_monitoring() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "IOKit", kind = "framework")]
+        extern "C" {
+            fn IOHIDCheckAccess(request_type: u32) -> u32;
+        }
+        return unsafe { IOHIDCheckAccess(1) == 1 };
+    }
+    #[cfg(not(target_os = "macos"))]
+    return true;
+}
+
+#[tauri::command]
+fn request_input_monitoring() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        #[link(name = "IOKit", kind = "framework")]
+        extern "C" {
+            fn IOHIDRequestAccess(request_type: u32) -> bool;
+        }
+        return unsafe { IOHIDRequestAccess(1) };
+    }
+    #[cfg(not(target_os = "macos"))]
+    return true;
+}
+
+#[tauri::command]
+fn open_privacy_settings(page: String) {
+    #[cfg(target_os = "macos")]
+    {
+        let url = match page.as_str() {
+            "input_monitoring" => "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ListenEvent",
+            "accessibility" => "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility",
+            _ => return,
+        };
+        let _ = Command::new("open").arg(url).spawn();
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(AppState {
@@ -853,6 +936,11 @@ fn main() {
             read_clipboard_text,
             write_clipboard_text,
             run_clipboard_ocr,
+            check_accessibility,
+            request_accessibility,
+            check_input_monitoring,
+            request_input_monitoring,
+            open_privacy_settings,
             frontend_ready
         ])
         .run(tauri::generate_context!())

@@ -189,6 +189,36 @@ export async function writeClipboardText(text: string): Promise<void> {
   throw new Error("Clipboard write is not available in this runtime.");
 }
 
+export async function checkAccessibility(): Promise<boolean> {
+  if (!isTauriRuntime()) return true;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<boolean>("check_accessibility");
+}
+
+export async function requestAccessibility(): Promise<boolean> {
+  if (!isTauriRuntime()) return true;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<boolean>("request_accessibility");
+}
+
+export async function openPrivacySettings(page: "input_monitoring" | "accessibility"): Promise<void> {
+  if (!isTauriRuntime()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_privacy_settings", { page });
+}
+
+export async function checkInputMonitoring(): Promise<boolean> {
+  if (!isTauriRuntime()) return true;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<boolean>("check_input_monitoring");
+}
+
+export async function requestInputMonitoring(): Promise<boolean> {
+  if (!isTauriRuntime()) return true;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<boolean>("request_input_monitoring");
+}
+
 export async function runClipboardOcr(): Promise<string> {
   if (!isTauriRuntime()) {
     throw new Error("Clipboard OCR is only available in the Tauri runtime.");

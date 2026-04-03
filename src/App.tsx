@@ -10,10 +10,14 @@ import {
   takeTranslationEvents,
   translate,
   waitForBackend,
+  cancelTranslation,
+  checkAccessibility,
+  checkInputMonitoring,
+  openPrivacySettings,
   writeClipboardText
 } from "./lib/api";
 import type { AppConfig, HistoryItem, TranslationRequest, TranslationResponse } from "./types";
-import { IconCopy, IconHistory, IconMagic, IconSearch, IconSettings, IconSwap, IconTrash, IconX } from "./icons";
+import { IconCopy, IconHistory, IconMagic, IconSearch, IconSettings, IconStop, IconSwap, IconTrash, IconX } from "./icons";
 import "./styles.css";
 
 // --- i18n & Lang Mapping ---
@@ -50,6 +54,12 @@ const I18N = {
     context_desc: "Reference surroundings for coherence.",
     hotkey: "Quick Translate",
     hotkey_desc: "Trigger on double Copy (⌘C C).",
+    accessibility: "Accessibility",
+    accessibility_desc: "Required for the double-⌘C hotkey.",
+    grant_accessibility: "Grant Access",
+    accessibility_granted: "Granted",
+    input_monitoring: "Input Monitoring",
+    input_monitoring_desc: "Required for the double-⌘C hotkey.",
     search: "Search history...",
     empty_history: "No translations found.",
     confirm_clear: "Purge all history?",
@@ -88,6 +98,12 @@ const I18N = {
     context_desc: "参考上下文信息提升连贯性。",
     hotkey: "快速翻译",
     hotkey_desc: "双击 ⌘C 即可触发翻译。",
+    accessibility: "辅助功能",
+    accessibility_desc: "双击 ⌘C 快捷键需要此权限。",
+    grant_accessibility: "授予权限",
+    accessibility_granted: "已授权",
+    input_monitoring: "输入监控",
+    input_monitoring_desc: "双击 ⌘C 快捷键需要此权限。",
     search: "搜索历史...",
     empty_history: "暂无历史记录。",
     confirm_clear: "确定清空所有记录？",
@@ -144,6 +160,8 @@ export default function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
+  const [accessibilityGranted, setAccessibilityGranted] = useState(true);
+  const [inputMonitoringGranted, setInputMonitoringGranted] = useState(true);
   const [history, setHistory] = useState<HistoryItem[]>(() => {
     const saved = localStorage.getItem("translator_history_v2");
     return saved ? JSON.parse(saved) : [];
@@ -265,6 +283,14 @@ export default function App() {
     }
   };
 
+  const stopTranslation = () => {
+    const jobId = currentJobIdRef.current;
+    currentJobIdRef.current = null;
+    setIsSubmitting(false);
+    setStatus("Stopped");
+    if (jobId !== null) void cancelTranslation(jobId);
+  };
+
   const updateConfig = async (patch: Partial<ExtendedConfig>) => {
     const next = { ...config, ...patch };
     setConfig(next);
@@ -315,7 +341,7 @@ export default function App() {
         </div>
         <div className="nav-actions">
           <button className="icon-btn" onClick={() => setShowHistory(true)} title={t("history")}><IconHistory /></button>
-          <button className="icon-btn" onClick={() => setShowSettings(true)} title={t("settings")}><IconSettings /></button>
+          <button className="icon-btn" onClick={async () => { setShowSettings(true); const [ax, im] = await Promise.all([checkAccessibility(), checkInputMonitoring()]); setAccessibilityGranted(ax); setInputMonitoringGranted(im); }} title={t("settings")}><IconSettings /></button>
         </div>
       </nav>
 
@@ -353,12 +379,29 @@ export default function App() {
       </main>
 
       <div className="floating-toolbar">
-        <button className="icon-btn" onClick={async () => { setStatus("OCR..."); try { const text = await runClipboardOcr(); if (text) runTranslation(text); else setStatus("No text"); } catch (err: any) { setStatus(`OCR Error: ${err.message}`); } }}><IconMagic /></button>
+        <button className="icon-btn" onClick={async () => {
+          try {
+            const clipText = await readClipboardText();
+            if (clipText.trim()) { setInput(clipText); setStatus(t("ready")); return; }
+          } catch { /* no text, try OCR */ }
+          setStatus("OCR...");
+          try {
+            const ocrText = await runClipboardOcr();
+            if (ocrText) { setInput(ocrText); setStatus(t("ready")); } else setStatus("No content in clipboard");
+          } catch (e: any) { setStatus(`OCR Error: ${e.message}`); }
+        }}><IconMagic /></button>
         <div style={{ width: 1, alignSelf: "stretch", background: "var(--border-medium)", margin: "4px 0" }} />
-        <button className="primary-btn" disabled={isSubmitting || !input.trim()} onClick={() => runTranslation(input)}>
-          {isSubmitting ? "Translating..." : "Translate"}
-          <span style={{ fontSize: "0.7rem", opacity: 0.6, marginLeft: 4 }}>⌘↵</span>
-        </button>
+        {isSubmitting ? (
+          <button className="primary-btn stop-btn" onClick={stopTranslation}>
+            <IconStop />
+            <span>Stop</span>
+          </button>
+        ) : (
+          <button className="primary-btn" disabled={!input.trim()} onClick={() => runTranslation(input)}>
+            Translate
+            <span style={{ fontSize: "0.7rem", opacity: 0.6, marginLeft: 4 }}>⌘↵</span>
+          </button>
+        )}
       </div>
 
       <footer className="status-bar">
@@ -429,6 +472,32 @@ export default function App() {
               <div className="settings-section">
                 <div className="section-label">{t("features")}</div>
                 <div className="settings-list">
+                  <div className="settings-row">
+                    <div className="settings-info">
+                      <div className="settings-name">{t("accessibility")}</div>
+                      <div className="settings-desc">{t("accessibility_desc")}</div>
+                    </div>
+                    {accessibilityGranted
+                      ? <span style={{ fontSize: "0.8rem", color: "var(--fg-muted)", fontWeight: 600 }}>{t("accessibility_granted")} ✓</span>
+                      : <div style={{ display: "flex", gap: 6 }}>
+                          <button className="secondary-btn-sm" onClick={() => openPrivacySettings("accessibility")}>{t("grant_accessibility")}</button>
+                          <button className="secondary-btn-sm" onClick={async () => { await syncHotkeyListener(); setAccessibilityGranted(await checkAccessibility()); }}>{config.ui_lang === "zh" ? "重试" : "Retry"}</button>
+                        </div>
+                    }
+                  </div>
+                  <div className="settings-row">
+                    <div className="settings-info">
+                      <div className="settings-name">{t("input_monitoring")}</div>
+                      <div className="settings-desc">{t("input_monitoring_desc")}</div>
+                    </div>
+                    {inputMonitoringGranted
+                      ? <span style={{ fontSize: "0.8rem", color: "var(--fg-muted)", fontWeight: 600 }}>{t("accessibility_granted")} ✓</span>
+                      : <div style={{ display: "flex", gap: 6 }}>
+                          <button className="secondary-btn-sm" onClick={() => openPrivacySettings("input_monitoring")}>{t("grant_accessibility")}</button>
+                          <button className="secondary-btn-sm" onClick={async () => { await syncHotkeyListener(); setInputMonitoringGranted(await checkInputMonitoring()); }}>{config.ui_lang === "zh" ? "重试" : "Retry"}</button>
+                        </div>
+                    }
+                  </div>
                   <div className="settings-row">
                     <div className="settings-info"><div className="settings-name">{t("bilingual")}</div><div className="settings-desc">{t("bilingual_desc")}</div></div>
                     <Toggle checked={config.output_mode === "interleaved"} onChange={v => updateConfig({ output_mode: v ? "interleaved" : "translations_only" })} />
