@@ -19,7 +19,7 @@ import {
   writeClipboardText
 } from "./lib/api";
 import type { AppConfig, HistoryItem, TranslationRequest, TranslationResponse } from "./types";
-import { IconCollapse, IconCopy, IconExpand, IconHistory, IconMagic, IconSearch, IconSettings, IconStop, IconSwap, IconTrash, IconX } from "./icons";
+import { IconCollapse, IconCopy, IconExpand, IconHistory, IconLock, IconMagic, IconSearch, IconSettings, IconStop, IconSwap, IconTrash, IconUnlock, IconX } from "./icons";
 import "./styles.css";
 
 // --- i18n & Lang Mapping ---
@@ -165,6 +165,12 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
   const [fullscreenPanel, setFullscreenPanel] = useState<null | "input" | "output">(null);
+  const [scrollLocked, setScrollLocked] = useState(false);
+  const scrollLockedRef = useRef(false);
+  const inputScrollRef = useRef<HTMLTextAreaElement>(null);
+  const outputScrollRef = useRef<HTMLDivElement>(null);
+  const syncedScrollTargetRef = useRef<HTMLElement | null>(null);
+  const scrollSyncReleaseRef = useRef<number | null>(null);
   const [accessibilityGranted, setAccessibilityGranted] = useState(true);
   const [inputMonitoringGranted, setInputMonitoringGranted] = useState(true);
   const [history, setHistory] = useState<HistoryItem[]>(() => {
@@ -290,9 +296,40 @@ export default function App() {
 
   useEffect(() => { localStorage.setItem("translator_history_v2", JSON.stringify(history)); }, [history]);
 
+  const releaseScrollSyncLock = () => {
+    if (scrollSyncReleaseRef.current !== null) {
+      window.clearTimeout(scrollSyncReleaseRef.current);
+      scrollSyncReleaseRef.current = null;
+    }
+    syncedScrollTargetRef.current = null;
+  };
+
+  const handleScrollSync = (source: HTMLElement, target: HTMLElement) => {
+    if (!scrollLockedRef.current) return;
+    if (syncedScrollTargetRef.current === source) return;
+
+    const sourceMaxScroll = Math.max(source.scrollHeight - source.clientHeight, 0);
+    const targetMaxScroll = Math.max(target.scrollHeight - target.clientHeight, 0);
+    const progress = sourceMaxScroll === 0 ? 0 : source.scrollTop / sourceMaxScroll;
+    const nextTargetScrollTop = progress * targetMaxScroll;
+
+    syncedScrollTargetRef.current = target;
+    target.scrollTop = nextTargetScrollTop;
+
+    if (scrollSyncReleaseRef.current !== null) {
+      window.clearTimeout(scrollSyncReleaseRef.current);
+    }
+    scrollSyncReleaseRef.current = window.setTimeout(() => {
+      syncedScrollTargetRef.current = null;
+      scrollSyncReleaseRef.current = null;
+    }, 80);
+  };
+
   useEffect(() => {
     if (isTauriRuntime()) void syncHotkeyListener();
   }, [config.hotkey_enabled]);
+
+  useEffect(() => releaseScrollSyncLock, []);
 
   useEffect(() => {
     if (showHistory && historyListRef.current) {
@@ -461,7 +498,7 @@ export default function App() {
             </div>
           </div>
           <div className="editor-content">
-            <textarea placeholder={t("placeholder")} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runTranslation(input); }} onPaste={async (e) => { const items = e.clipboardData?.items; if (!items) return; for (let i = 0; i < items.length; i++) { if (items[i].type.startsWith("image/")) { e.preventDefault(); setStatus("OCR..."); try { const text = await runClipboardOcr(); if (text) runTranslation(text); else setStatus("No text"); } catch (err: any) { setStatus(`OCR Error: ${err.message}`); } return; } } }} />
+            <textarea ref={inputScrollRef} placeholder={t("placeholder")} value={input} onChange={e => setInput(e.target.value)} onScroll={e => { if (outputScrollRef.current) handleScrollSync(e.currentTarget, outputScrollRef.current); }} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runTranslation(input); }} onPaste={async (e) => { const items = e.clipboardData?.items; if (!items) return; for (let i = 0; i < items.length; i++) { if (items[i].type.startsWith("image/")) { e.preventDefault(); setStatus("OCR..."); try { const text = await runClipboardOcr(); if (text) runTranslation(text); else setStatus("No text"); } catch (err: any) { setStatus(`OCR Error: ${err.message}`); } return; } } }} />
           </div>
         </section>
         <section className={`editor-panel${fullscreenPanel === "input" ? " panel-hidden" : ""}`}>
@@ -469,11 +506,12 @@ export default function App() {
           <div className="panel-header">
             <span className="panel-label">{t("translation")}</span>
             <div style={{ display: "flex", gap: 4 }}>
+              <button className="icon-btn" onMouseDown={e => e.preventDefault()} onClick={() => { const next = !scrollLockedRef.current; scrollLockedRef.current = next; setScrollLocked(next); }} title={scrollLocked ? "Unlock scroll" : "Lock scroll sync"} style={scrollLocked ? { color: "var(--bg-accent)" } : undefined}>{scrollLocked ? <IconLock /> : <IconUnlock />}</button>
               <button className="icon-btn" onClick={() => setFullscreenPanel(fullscreenPanel === "output" ? null : "output")} title={fullscreenPanel === "output" ? "Exit fullscreen" : "Fullscreen"}>{fullscreenPanel === "output" ? <IconCollapse /> : <IconExpand />}</button>
               <button className="icon-btn" onClick={async () => { try { await writeClipboardText(output); setStatus(t("copied")); setTimeout(() => setStatus(t("done")), 2000); } catch (err: any) { setStatus(`Copy Error: ${err.message}`); } }} disabled={!output}><IconCopy /></button>
             </div>
           </div>
-          <div className="editor-content output-content">
+          <div ref={outputScrollRef} className="editor-content output-content" onScroll={e => { if (inputScrollRef.current) handleScrollSync(e.currentTarget, inputScrollRef.current); }}>
             {config.output_mode === "interleaved" && segments.length > 0 ? (
               <div className="bilingual-viewer">
                 {segments.map((seg, i) => (
