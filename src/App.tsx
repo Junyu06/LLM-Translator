@@ -3,6 +3,8 @@ import {
   isTauriRuntime,
   notifyFrontendReady,
   readClipboardText,
+  requestAccessibility,
+  requestInputMonitoring,
   runClipboardOcr,
   saveConfig,
   startTranslationStream,
@@ -143,6 +145,8 @@ const defaultConfig: ExtendedConfig = {
   ui_lang: "en"
 };
 
+const PERMISSION_AUTO_REQUEST_KEY = "translator_permission_autorequest_v1";
+
 const Toggle = ({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) => (
   <label className="switch"><input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} /><span className="slider"></span></label>
 );
@@ -168,20 +172,101 @@ export default function App() {
   });
   
   const currentJobIdRef = useRef<number | null>(null);
-  const runTranslationRef = useRef<(text: string) => void>();
   const historyListRef = useRef<HTMLDivElement>(null);
   const historyScrollRef = useRef(0);
+  const permissionPollRef = useRef<number | null>(null);
+  const runTranslationRef = useRef<(text: string) => Promise<void>>(async () => {});
+  const captureClipboardIntoInputRef = useRef<(prefilledText?: string, autoTranslate?: boolean) => Promise<void>>(async () => {});
   const t = (key: keyof typeof I18N.en) => I18N[config.ui_lang || "en"][key];
   const langName = (code: string) => LANG_MAP[config.ui_lang || "en"][code] || code.toUpperCase();
+
+  const stopPermissionPolling = () => {
+    if (permissionPollRef.current !== null) {
+      window.clearInterval(permissionPollRef.current);
+      permissionPollRef.current = null;
+    }
+  };
+
+  const startPermissionPolling = (initialAccessibility: boolean, initialInputMonitoring: boolean) => {
+    stopPermissionPolling();
+
+    let lastAccessibility = initialAccessibility;
+    let lastInputMonitoring = initialInputMonitoring;
+    let syncedHotkey = false;
+    let attempts = 0;
+
+    const poll = async () => {
+      attempts += 1;
+      try {
+        const [ax, im] = await Promise.all([checkAccessibility(), checkInputMonitoring()]);
+        setAccessibilityGranted(ax);
+        setInputMonitoringGranted(im);
+
+        if (ax && im && !syncedHotkey) {
+          syncedHotkey = true;
+          await syncHotkeyListener();
+        }
+
+        lastAccessibility = ax;
+        lastInputMonitoring = im;
+
+        if ((ax && im) || attempts >= 180) {
+          stopPermissionPolling();
+        }
+      } catch (error) {
+        console.error(error);
+        if (attempts >= 180) {
+          stopPermissionPolling();
+        }
+      }
+    };
+
+    void poll();
+    permissionPollRef.current = window.setInterval(() => {
+      void poll();
+    }, 1000);
+  };
+
+  const initializeMacPermissions = async () => {
+    if (!isTauriRuntime()) return;
+
+    const [ax, im] = await Promise.all([checkAccessibility(), checkInputMonitoring()]);
+    setAccessibilityGranted(ax);
+    setInputMonitoringGranted(im);
+
+    if (ax && im) {
+      await syncHotkeyListener();
+      return;
+    }
+
+    const hasAutoRequested = localStorage.getItem(PERMISSION_AUTO_REQUEST_KEY) === "1";
+    if (!hasAutoRequested) {
+      localStorage.setItem(PERMISSION_AUTO_REQUEST_KEY, "1");
+
+      if (!ax) {
+        try {
+          await requestAccessibility();
+        } catch (error) {
+          console.error(error);
+        }
+      }
+
+      if (!im) {
+        try {
+          await requestInputMonitoring();
+        } catch (error) {
+          console.error(error);
+        }
+      }
+    }
+
+    startPermissionPolling(ax, im);
+  };
 
   // Hotkey bridge: Rust evals window.__translatorTriggerClipboardTranslation(text)
   useEffect(() => {
     (globalThis as any).__translatorTriggerClipboardTranslation = (text?: string) => {
-      if (text) {
-        runTranslationRef.current?.(text);
-      } else {
-        readClipboardText().then(clipText => { if (clipText) runTranslationRef.current?.(clipText); }).catch(console.error);
-      }
+      void captureClipboardIntoInputRef.current(text, true);
     };
     return () => { delete (globalThis as any).__translatorTriggerClipboardTranslation; };
   }, []);
@@ -194,9 +279,12 @@ export default function App() {
       document.body.setAttribute("data-theme", merged.theme || "system");
       if (isTauriRuntime()) {
         void notifyFrontendReady();
-        void syncHotkeyListener();
+        void initializeMacPermissions();
       }
     }).catch((err) => setStatus(`Error: ${err.message}`));
+    return () => {
+      stopPermissionPolling();
+    };
   }, []);
 
   useEffect(() => { localStorage.setItem("translator_history_v2", JSON.stringify(history)); }, [history]);
@@ -222,8 +310,6 @@ export default function App() {
     const newItem: HistoryItem = { id: Math.random().toString(36).substring(2, 9), source: source.trim(), target: target.trim(), timestamp: Date.now() };
     setHistory(prev => [newItem, ...prev.filter(i => i.source !== source.trim()).slice(0, 99)]);
   };
-
-  runTranslationRef.current = (text: string) => { void runTranslation(text); };
 
   const runTranslation = async (text: string) => {
     if (!text.trim() || isSubmitting) return;
@@ -256,6 +342,25 @@ export default function App() {
     } catch (err: any) { setStatus(`Error: ${err.message}`); } finally { setIsSubmitting(false); setProgressRatio(100); }
   };
 
+  runTranslationRef.current = runTranslation;
+  captureClipboardIntoInputRef.current = async (prefilledText?: string, autoTranslate = false) => {
+    let clipboardText = prefilledText ?? "";
+    if (!clipboardText) {
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        clipboardText = await readClipboardText().catch(() => "");
+        if (clipboardText) break;
+        await new Promise((resolve) => window.setTimeout(resolve, 50));
+      }
+    }
+    setInput(clipboardText);
+    setOutput("");
+    setSegments([]);
+    setStatus(t("ready"));
+
+    if (autoTranslate && clipboardText) {
+      await runTranslationRef.current(clipboardText);
+    }
+  };
   const pollProgress = async (jobId: number, sourceText: string) => {
     let finalOutput = "";
     let doneSegs: { source: string; target: string }[] = [];
@@ -379,17 +484,7 @@ export default function App() {
       </main>
 
       <div className="floating-toolbar">
-        <button className="icon-btn" onClick={async () => {
-          try {
-            const clipText = await readClipboardText();
-            if (clipText.trim()) { setInput(clipText); setStatus(t("ready")); return; }
-          } catch { /* no text, try OCR */ }
-          setStatus("OCR...");
-          try {
-            const ocrText = await runClipboardOcr();
-            if (ocrText) { setInput(ocrText); setStatus(t("ready")); } else setStatus("No content in clipboard");
-          } catch (e: any) { setStatus(`OCR Error: ${e.message}`); }
-        }}><IconMagic /></button>
+        <button className="icon-btn" onClick={() => { void captureClipboardIntoInputRef.current(undefined, true); }}><IconMagic /></button>
         <div style={{ width: 1, alignSelf: "stretch", background: "var(--border-medium)", margin: "4px 0" }} />
         {isSubmitting ? (
           <button className="primary-btn stop-btn" onClick={stopTranslation}>

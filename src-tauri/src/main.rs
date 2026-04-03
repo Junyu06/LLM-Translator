@@ -204,16 +204,20 @@ fn hotkey_enabled() -> bool {
 
 fn read_clipboard_text_impl() -> Result<String, String> {
     if cfg!(target_os = "macos") {
-        let output = Command::new("/usr/bin/pbpaste")
+        let output = Command::new(python_executable()?)
+            .args([
+                "-c",
+                "import pyperclip, sys; sys.stdout.write(pyperclip.paste() or '')",
+            ])
             .output()
-            .map_err(|error| format!("Failed to read clipboard via pbpaste: {error}"))?;
+            .map_err(|error| format!("Failed to read clipboard via pyperclip: {error}"))?;
         if output.status.success() {
             return String::from_utf8(output.stdout)
                 .map_err(|error| format!("Clipboard text was not valid UTF-8: {error}"));
         }
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
-            "pbpaste exited unsuccessfully".to_string()
+            "pyperclip clipboard read exited unsuccessfully".to_string()
         } else {
             stderr
         });
@@ -816,7 +820,7 @@ fn check_input_monitoring() -> bool {
         extern "C" {
             fn IOHIDCheckAccess(request_type: u32) -> u32;
         }
-        return unsafe { IOHIDCheckAccess(1) == 1 };
+        return unsafe { IOHIDCheckAccess(1) == 0 }; // kIOHIDAccessTypeGranted = 0
     }
     #[cfg(not(target_os = "macos"))]
     return true;
@@ -863,6 +867,7 @@ fn main() {
         })
         .setup(|app| {
             build_tray(&app.handle())?;
+            #[cfg(not(target_os = "macos"))]
             let _ = spawn_hotkey_listener(&app.handle(), &app.state::<AppState>());
             Ok(())
         })
