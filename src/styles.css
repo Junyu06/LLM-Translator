@@ -69,9 +69,11 @@ body { margin: 0; padding: 0; font-family: var(--font-sans); background: var(--b
 
 /* Workspace */
 .main-workspace { flex: 1; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; gap: 24px; min-height: 0; }
+.main-workspace.fullscreen { grid-template-columns: 1fr; }
 @media (max-width: 768px) { .main-workspace { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
 
 .editor-panel { display: flex; flex-direction: column; background: var(--bg-surface); border-radius: var(--radius-lg); position: relative; transition: var(--transition-base); border: 1px solid var(--border-light); min-height: 0; overflow: hidden; }
+.editor-panel.panel-hidden { display: none; }
 .editor-panel:focus-within { box-shadow: var(--shadow-soft); border-color: var(--border-medium); }
 .panel-header { padding: 16px 20px 8px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
 .panel-label { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-subtle); }

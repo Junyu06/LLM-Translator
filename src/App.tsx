@@ -19,7 +19,7 @@ import {
   writeClipboardText
 } from "./lib/api";
 import type { AppConfig, HistoryItem, TranslationRequest, TranslationResponse } from "./types";
-import { IconCopy, IconHistory, IconMagic, IconSearch, IconSettings, IconStop, IconSwap, IconTrash, IconX } from "./icons";
+import { IconCollapse, IconCopy, IconExpand, IconHistory, IconMagic, IconSearch, IconSettings, IconStop, IconSwap, IconTrash, IconX } from "./icons";
 import "./styles.css";
 
 // --- i18n & Lang Mapping ---
@@ -164,6 +164,7 @@ export default function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
+  const [fullscreenPanel, setFullscreenPanel] = useState<null | "input" | "output">(null);
   const [accessibilityGranted, setAccessibilityGranted] = useState(true);
   const [inputMonitoringGranted, setInputMonitoringGranted] = useState(true);
   const [history, setHistory] = useState<HistoryItem[]>(() => {
@@ -450,21 +451,27 @@ export default function App() {
         </div>
       </nav>
 
-      <main className="main-workspace">
-        <section className="editor-panel">
+      <main className={`main-workspace${fullscreenPanel ? " fullscreen" : ""}`}>
+        <section className={`editor-panel${fullscreenPanel === "output" ? " panel-hidden" : ""}`}>
           <div className="panel-header">
             <span className="panel-label">{t("source")}</span>
-            <button className="icon-btn" onClick={() => { setInput(""); setOutput(""); }}><IconTrash /></button>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button className="icon-btn" onClick={() => setFullscreenPanel(fullscreenPanel === "input" ? null : "input")} title={fullscreenPanel === "input" ? "Exit fullscreen" : "Fullscreen"}>{fullscreenPanel === "input" ? <IconCollapse /> : <IconExpand />}</button>
+              <button className="icon-btn" onClick={() => { setInput(""); setOutput(""); }}><IconTrash /></button>
+            </div>
           </div>
           <div className="editor-content">
             <textarea placeholder={t("placeholder")} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runTranslation(input); }} onPaste={async (e) => { const items = e.clipboardData?.items; if (!items) return; for (let i = 0; i < items.length; i++) { if (items[i].type.startsWith("image/")) { e.preventDefault(); setStatus("OCR..."); try { const text = await runClipboardOcr(); if (text) runTranslation(text); else setStatus("No text"); } catch (err: any) { setStatus(`OCR Error: ${err.message}`); } return; } } }} />
           </div>
         </section>
-        <section className="editor-panel">
+        <section className={`editor-panel${fullscreenPanel === "input" ? " panel-hidden" : ""}`}>
           {isSubmitting && <div className="progress-container"><div className="progress-bar" style={{ width: `${progressRatio}%` }} /></div>}
           <div className="panel-header">
             <span className="panel-label">{t("translation")}</span>
-            <button className="icon-btn" onClick={async () => { try { await writeClipboardText(output); setStatus(t("copied")); setTimeout(() => setStatus(t("done")), 2000); } catch (err: any) { setStatus(`Copy Error: ${err.message}`); } }} disabled={!output}><IconCopy /></button>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button className="icon-btn" onClick={() => setFullscreenPanel(fullscreenPanel === "output" ? null : "output")} title={fullscreenPanel === "output" ? "Exit fullscreen" : "Fullscreen"}>{fullscreenPanel === "output" ? <IconCollapse /> : <IconExpand />}</button>
+              <button className="icon-btn" onClick={async () => { try { await writeClipboardText(output); setStatus(t("copied")); setTimeout(() => setStatus(t("done")), 2000); } catch (err: any) { setStatus(`Copy Error: ${err.message}`); } }} disabled={!output}><IconCopy /></button>
+            </div>
           </div>
           <div className="editor-content output-content">
             {config.output_mode === "interleaved" && segments.length > 0 ? (
