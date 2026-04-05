@@ -1,6 +1,7 @@
 :root {
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --floating-toolbar-clearance: 132px;
 
   /* Theme: Light */
   --bg-app: #ffffff;
@@ -78,8 +79,8 @@ body { margin: 0; padding: 0; font-family: var(--font-sans); background: var(--b
 .panel-header { padding: 16px 20px 8px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
 .panel-label { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-subtle); }
 .editor-content { flex: 1; padding: 0 20px 20px; display: flex; flex-direction: column; min-height: 0; }
-textarea { width: 100%; height: 100%; border: none; background: transparent; color: var(--fg-main); font-family: var(--font-sans); font-size: 1em; line-height: 1.6; resize: none; outline: none; padding: 0; }
-.output-content { flex: 1; font-size: 1em; line-height: 1.6; color: var(--fg-main); overflow-y: auto; white-space: pre-wrap; word-break: break-word; min-height: 0; }
+textarea { width: 100%; height: 100%; border: none; background: transparent; color: var(--fg-main); font-family: var(--font-sans); font-size: 1em; line-height: 1.6; resize: none; outline: none; padding: 0 0 var(--floating-toolbar-clearance); }
+.output-content { flex: 1; font-size: 1em; line-height: 1.6; color: var(--fg-main); overflow-y: auto; white-space: pre-wrap; word-break: break-word; min-height: 0; padding-bottom: var(--floating-toolbar-clearance); }
 
 /* Bilingual Viewer */
 .bilingual-viewer { 
