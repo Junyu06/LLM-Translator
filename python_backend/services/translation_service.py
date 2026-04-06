@@ -4,9 +4,19 @@ import re
 from typing import Any, Iterator
 
 from backend import OllamaBackend, OllamaBackendOptions, OllamaMode
-from core import AlignedPair, OutputMode, PipelineOptions, PromptOptions, SplitMode, SplitOptions, render_output
+from core import (
+    AlignedPair,
+    OutputMode,
+    PipelineOptions,
+    PromptOptions,
+    PromptPreset,
+    SplitMode,
+    SplitOptions,
+    render_output,
+)
 from core.postprocess import extract_translation
 from core.prompt import build_prompt
+from core.splitter import Segment
 from core.splitter import split_plain, split_with_limited_context
 
 from ..models import SegmentResult, TranslationRequest, TranslationResponse
@@ -33,10 +43,12 @@ class TranslationService:
         if not text:
             raise ValueError("Nothing to translate.")
 
-        split_mode = SplitMode.CONTEXT if request.use_context else SplitMode.PLAIN
+        is_markdown_mode = request.translation_mode == "markdown"
+        split_mode = SplitMode.CONTEXT if request.use_context and not is_markdown_mode else SplitMode.PLAIN
         prompt_opt = PromptOptions(
             source_lang=request.source_lang,
             target_lang=request.target_lang,
+            preset=PromptPreset.MARKDOWN if is_markdown_mode else PromptPreset.AUTO,
         )
         split_opt = SplitOptions(strip_each_line=True, drop_empty_lines=False)
         opt = PipelineOptions(
@@ -54,7 +66,9 @@ class TranslationService:
         backend = OllamaBackend(backend_opt)
         output_mode = OutputMode(request.output_mode)
 
-        if split_mode == SplitMode.CONTEXT:
+        if is_markdown_mode:
+            segments = [Segment(text=text, context="")]
+        elif split_mode == SplitMode.CONTEXT:
             segments = split_with_limited_context(text, split_opt=opt.split_opt, ctx_opt=opt.ctx_opt)
         else:
             segments = split_plain(text, opt=opt.split_opt)

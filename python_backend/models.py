@@ -7,10 +7,11 @@ from typing import Any
 @dataclass
 class AppConfig:
     source_lang: str = "auto"
-    target_lang: str = "en"
+    target_lang: str = "zh"
     use_context: bool = False
     collapse_newlines: bool = False
     output_mode: str = "translations_only"
+    translation_mode: str = "normal"
     layout: str = "vertical"
     mode: str = "local"
     host: str = "http://127.0.0.1:11434"
@@ -18,6 +19,8 @@ class AppConfig:
     font_size: int = 14
     hotkey_enabled: bool = True
     minimize_to_tray: bool = True
+    theme: str = "system"
+    ui_lang: str = "en"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -27,10 +30,11 @@ class AppConfig:
 class TranslationRequest:
     text: str
     source_lang: str = "auto"
-    target_lang: str = "en"
+    target_lang: str = "zh"
     use_context: bool = False
     collapse_newlines: bool = False
     output_mode: str = "translations_only"
+    translation_mode: str = "normal"
     model: str = "demonbyron/HY-MT1.5-1.8B"
     mode: str = "local"
     host: str = "http://127.0.0.1:11434"
@@ -51,4 +55,3 @@ class TranslationResponse:
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         return data
-

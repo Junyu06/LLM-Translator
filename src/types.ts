@@ -6,6 +6,7 @@ export type AppConfig = {
   use_context: boolean;
   collapse_newlines: boolean;
   output_mode: "translations_only" | "interleaved";
+  translation_mode: "normal" | "markdown";
   layout: "vertical" | "horizontal";
   mode: "local" | "http";
   host: string;
@@ -13,6 +14,8 @@ export type AppConfig = {
   font_size: number;
   hotkey_enabled: boolean;
   minimize_to_tray: boolean;
+  theme: "light" | "dark" | "system";
+  ui_lang: "en" | "zh";
 };
 
 export type TranslationRequest = {
@@ -22,6 +25,7 @@ export type TranslationRequest = {
   use_context: boolean;
   collapse_newlines: boolean;
   output_mode: "translations_only" | "interleaved";
+  translation_mode: "normal" | "markdown";
   mode: "local" | "http";
   host: string;
   model: string;

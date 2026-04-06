@@ -12,6 +12,7 @@ class PromptPreset(str, Enum):
     TERMINOLOGY = "terminology"
     CONTEXTUAL = "contextual"
     FORMATTED_ZH = "formatted_zh"
+    MARKDOWN = "markdown"
 
 
 @dataclass
@@ -100,6 +101,14 @@ def build_prompt(source_text: str, opt: PromptOptions) -> str:
             "将以下<source></source>之间的文本翻译为中文，注意只需要输出翻译后的结果，不要额外解释，"
             "原文中的<sn></sn>标签表示标签内文本包含格式信息，需要在译文中相应的位置尽量保留该标签。输出格式为：<target>str</target>\n\n"
             f"<source>{src}</source>\n"
+        )
+
+    if preset == PromptPreset.MARKDOWN:
+        return (
+            f"Translate the following Markdown content into {tgt_disp}. "
+            "Preserve the Markdown structure, headings, lists, tables, links, emphasis, and code fences. "
+            "Translate only human-readable prose, do not add explanations, and return Markdown only.\n\n"
+            f"{source_text}\n"
         )
 
     # fallback

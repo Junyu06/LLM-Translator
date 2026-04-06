@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import {
   isTauriRuntime,
   notifyFrontendReady,
@@ -71,7 +72,10 @@ const I18N = {
     external: "Ollama",
     light: "Light",
     dark: "Dark",
-    system: "System"
+    system: "System",
+    mode_normal: "Normal",
+    mode_markdown: "Markdown",
+    mode_markdown_desc: "Preserve Markdown structure during translation."
   },
   zh: {
     title: "翻译器",
@@ -115,12 +119,15 @@ const I18N = {
     external: "Ollama",
     light: "亮色",
     dark: "暗色",
-    system: "跟随系统"
+    system: "跟随系统",
+    mode_normal: "常规",
+    mode_markdown: "Markdown",
+    mode_markdown_desc: "翻译时保留 Markdown 结构并渲染。"
   }
 };
 
 // --- Types ---
-interface ExtendedConfig extends AppConfig { theme?: "light" | "dark" | "system"; ui_lang?: "en" | "zh"; }
+interface ExtendedConfig extends AppConfig {}
 const LANGUAGES = ["auto", "zh", "en", "ja", "ko", "fr", "de", "es", "ru"];
 
 const cleanText = (text: string | undefined | null) => {
@@ -134,6 +141,7 @@ const defaultConfig: ExtendedConfig = {
   use_context: false,
   collapse_newlines: false,
   output_mode: "translations_only",
+  translation_mode: "normal",
   layout: "vertical",
   mode: "local",
   host: "http://127.0.0.1:11434",
@@ -358,7 +366,8 @@ export default function App() {
       target_lang: config.target_lang,
       use_context: config.use_context,
       collapse_newlines: config.collapse_newlines,
-      output_mode: "translations_only",
+      output_mode: config.output_mode,
+      translation_mode: config.translation_mode,
       mode: config.mode,
       host: config.host,
       model: config.model,
@@ -482,9 +491,15 @@ export default function App() {
             {LANGUAGES.filter(l => l !== "auto").map(l => <option key={l} value={l}>{langName(l)}</option>)}
           </select>
         </div>
-        <div className="nav-actions">
-          <button className="icon-btn" onClick={() => setShowHistory(true)} title={t("history")}><IconHistory /></button>
-          <button className="icon-btn" onClick={async () => { setShowSettings(true); const [ax, im] = await Promise.all([checkAccessibility(), checkInputMonitoring()]); setAccessibilityGranted(ax); setInputMonitoringGranted(im); }} title={t("settings")}><IconSettings /></button>
+        <div className="nav-right">
+          <div className="mode-switcher">
+            <button className={`mode-btn ${config.translation_mode === "normal" ? "active" : ""}`} onClick={() => updateConfig({ translation_mode: "normal" })} title={t("mode_normal")}>{t("mode_normal")}</button>
+            <button className={`mode-btn ${config.translation_mode === "markdown" ? "active" : ""}`} onClick={() => updateConfig({ translation_mode: "markdown" })} title={t("mode_markdown_desc")}>{t("mode_markdown")}</button>
+          </div>
+          <div className="nav-actions">
+            <button className="icon-btn" onClick={() => setShowHistory(true)} title={t("history")}><IconHistory /></button>
+            <button className="icon-btn" onClick={async () => { setShowSettings(true); const [ax, im] = await Promise.all([checkAccessibility(), checkInputMonitoring()]); setAccessibilityGranted(ax); setInputMonitoringGranted(im); }} title={t("settings")}><IconSettings /></button>
+          </div>
         </div>
       </nav>
 
@@ -517,12 +532,20 @@ export default function App() {
                 {segments.map((seg, i) => (
                   <div key={i} className="bilingual-segment">
                     <div className="segment-source">{seg.source}</div>
-                    <div className="segment-target">{seg.target}</div>
+                    <div className="segment-target">
+                      {config.translation_mode === "markdown" ? (
+                        <div className="markdown-body"><ReactMarkdown>{seg.target}</ReactMarkdown></div>
+                      ) : seg.target}
+                    </div>
                   </div>
                 ))}
               </div>
             ) : (
-              output || <span style={{ color: "var(--fg-subtle)" }}>{t("ready")}...</span>
+              config.translation_mode === "markdown" && output ? (
+                <div className="markdown-body"><ReactMarkdown>{output}</ReactMarkdown></div>
+              ) : (
+                output || <span style={{ color: "var(--fg-subtle)" }}>{t("ready")}...</span>
+              )
             )}
           </div>
         </section>
