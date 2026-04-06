@@ -2,6 +2,8 @@
 
 Translator is a local desktop translation tool built on top of Ollama.
 
+![Translator main window](./docs/images/main-window-markdown-mode.png)
+
 Its core workflow is:
 
 **Global hotkey → Read clipboard → Send text to local Ollama → Display translation in UI**
@@ -30,6 +32,7 @@ Translator reduces this friction to a single action:
 - Two output modes:
   - `translations_only`
   - `interleaved`
+- Markdown mode for structure-preserving document translation
 - Layout switching:
   - vertical / horizontal
 - Context-aware segmented translation (`Use Context`)
@@ -168,4 +171,4 @@ Then run:
 npm run tauri:dev
 ```
 
-This is still not full feature parity with the Tk apps. Tray behavior and clipboard translation are now present in the new shell, while global hotkey wiring, clipboard image OCR, and packaged Python bundling still belong to later phases.
+This is still not full feature parity with the Tk apps. Tray behavior, clipboard translation, and the main Markdown-capable desktop UI are now present in the new shell, while some native hotkey/OCR/packaging details still belong to later phases.

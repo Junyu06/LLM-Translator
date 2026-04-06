@@ -5,6 +5,8 @@
 本项目是一个本地翻译桌面工具，核心流程是：全局热键触发 → 读取剪贴板 → 发送到本地 Ollama → UI 显示译文。  
 它不训练模型，只调用 Ollama 中的量化模型（如 GGUF）进行推理。
 
+![Translator 主界面](./docs/images/main-window-markdown-mode.png)
+
 ## 解决的问题
 
 传统翻译流程需要来回切换应用、粘贴、等待结果。本项目把这个流程缩短为“复制两次即可翻译”，适合日常阅读与工作场景。
@@ -13,6 +15,7 @@
 
 - 全局热键触发（Windows: Ctrl+C Ctrl+C；macOS: Cmd+C Cmd+C）
 - 两种输出模式：`translations_only` / `interleaved`
+- 支持 Markdown 模式，适合保留结构的文档翻译
 - 支持布局切换（vertical / horizontal）
 - 支持上下文分段翻译（Use Context）
 - OCR 识别图片粘贴文本（见下方说明）
