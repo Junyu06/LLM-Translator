@@ -443,11 +443,12 @@ export default function App() {
     if (jobId !== null) void cancelTranslation(jobId);
   };
 
-  const updateConfig = async (patch: Partial<ExtendedConfig>) => {
-    const next = { ...config, ...patch };
-    setConfig(next);
+  const updateConfig = (patch: Partial<ExtendedConfig>) => {
+    setConfig(prev => ({ ...prev, ...patch }));
     if (patch.theme) document.body.setAttribute("data-theme", patch.theme);
-    await saveConfig(patch as any);
+    void saveConfig(patch as any).catch((error) => {
+      console.error(error);
+    });
   };
 
   const filteredHistory = (history || []).filter(i => {
