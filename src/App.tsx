@@ -23,6 +23,13 @@ import type { AppConfig, HistoryItem, TranslationRequest, TranslationResponse } 
 import { IconCollapse, IconCopy, IconExpand, IconHistory, IconLock, IconMagic, IconSearch, IconSettings, IconStop, IconSwap, IconTrash, IconUnlock, IconX } from "./icons";
 import "./styles.css";
 
+declare const __BUILD_PLATFORM__: "windows" | "macos" | "linux";
+
+const BUILD_PLATFORM = typeof __BUILD_PLATFORM__ === "string" ? __BUILD_PLATFORM__ : "linux";
+const IS_MAC_BUILD = BUILD_PLATFORM === "macos";
+const TRANSLATE_SHORTCUT = IS_MAC_BUILD ? "⌘+Enter" : "Ctrl+Enter";
+const DOUBLE_COPY_SHORTCUT = IS_MAC_BUILD ? "⌘C ⌘C" : "Ctrl+C Ctrl+C";
+
 // --- i18n & Lang Mapping ---
 const LANG_MAP: Record<string, Record<string, string>> = {
   en: { auto: "Detect", zh: "Chinese", en: "English", ja: "Japanese", ko: "Korean", fr: "French", de: "German", es: "Spanish", ru: "Russian" },
@@ -56,7 +63,7 @@ const I18N = {
     context: "Smart Context",
     context_desc: "Reference surroundings for coherence.",
     hotkey: "Quick Translate",
-    hotkey_desc: "Trigger on double Copy (⌘C C).",
+    hotkey_desc: "Trigger clipboard translation with double Copy.",
     accessibility: "Accessibility",
     accessibility_desc: "Required for the double-⌘C hotkey.",
     grant_accessibility: "Grant Access",
@@ -103,7 +110,7 @@ const I18N = {
     context: "智能上下文",
     context_desc: "参考上下文信息提升连贯性。",
     hotkey: "快速翻译",
-    hotkey_desc: "双击 ⌘C 即可触发翻译。",
+    hotkey_desc: "双击复制快捷键触发剪贴板翻译。",
     accessibility: "辅助功能",
     accessibility_desc: "双击 ⌘C 快捷键需要此权限。",
     grant_accessibility: "授予权限",
@@ -194,6 +201,9 @@ export default function App() {
   const captureClipboardIntoInputRef = useRef<(prefilledText?: string, autoTranslate?: boolean) => Promise<void>>(async () => {});
   const t = (key: keyof typeof I18N.en) => I18N[config.ui_lang || "en"][key];
   const langName = (code: string) => LANG_MAP[config.ui_lang || "en"][code] || code.toUpperCase();
+  const hotkeyDescription = config.ui_lang === "zh"
+    ? `${DOUBLE_COPY_SHORTCUT} 触发剪贴板翻译。`
+    : `${DOUBLE_COPY_SHORTCUT} triggers clipboard translation.`;
 
   const stopPermissionPolling = () => {
     if (permissionPollRef.current !== null) {
@@ -294,7 +304,12 @@ export default function App() {
       document.body.setAttribute("data-theme", merged.theme || "system");
       if (isTauriRuntime()) {
         void notifyFrontendReady();
-        void initializeMacPermissions();
+        if (IS_MAC_BUILD) {
+          void initializeMacPermissions();
+        } else {
+          setAccessibilityGranted(true);
+          setInputMonitoringGranted(true);
+        }
       }
     }).catch((err) => setStatus(`Error: ${err.message}`));
     return () => {
@@ -334,7 +349,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (isTauriRuntime()) void syncHotkeyListener();
+    if (isTauriRuntime() && IS_MAC_BUILD) void syncHotkeyListener();
   }, [config.hotkey_enabled]);
 
   useEffect(() => releaseScrollSyncLock, []);
@@ -562,8 +577,8 @@ export default function App() {
           </button>
         ) : (
           <button className="primary-btn" disabled={!input.trim()} onClick={() => runTranslation(input)}>
-            Translate
-            <span style={{ fontSize: "0.7rem", opacity: 0.6, marginLeft: 4 }}>⌘↵</span>
+            <span style={{ fontSize: "0.7rem", opacity: 0.6 }}>{TRANSLATE_SHORTCUT}</span>
+            <span>Translate</span>
           </button>
         )}
       </div>
@@ -638,30 +653,41 @@ export default function App() {
                 <div className="settings-list">
                   <div className="settings-row">
                     <div className="settings-info">
-                      <div className="settings-name">{t("accessibility")}</div>
-                      <div className="settings-desc">{t("accessibility_desc")}</div>
+                      <div className="settings-name">{t("hotkey")}</div>
+                      <div className="settings-desc">{hotkeyDescription}</div>
                     </div>
-                    {accessibilityGranted
-                      ? <span style={{ fontSize: "0.8rem", color: "var(--fg-muted)", fontWeight: 600 }}>{t("accessibility_granted")} ✓</span>
-                      : <div style={{ display: "flex", gap: 6 }}>
-                          <button className="secondary-btn-sm" onClick={() => openPrivacySettings("accessibility")}>{t("grant_accessibility")}</button>
-                          <button className="secondary-btn-sm" onClick={async () => { await syncHotkeyListener(); setAccessibilityGranted(await checkAccessibility()); }}>{config.ui_lang === "zh" ? "重试" : "Retry"}</button>
-                        </div>
-                    }
+                    <Toggle checked={config.hotkey_enabled} onChange={v => updateConfig({ hotkey_enabled: v })} />
                   </div>
-                  <div className="settings-row">
-                    <div className="settings-info">
-                      <div className="settings-name">{t("input_monitoring")}</div>
-                      <div className="settings-desc">{t("input_monitoring_desc")}</div>
-                    </div>
-                    {inputMonitoringGranted
-                      ? <span style={{ fontSize: "0.8rem", color: "var(--fg-muted)", fontWeight: 600 }}>{t("accessibility_granted")} ✓</span>
-                      : <div style={{ display: "flex", gap: 6 }}>
-                          <button className="secondary-btn-sm" onClick={() => openPrivacySettings("input_monitoring")}>{t("grant_accessibility")}</button>
-                          <button className="secondary-btn-sm" onClick={async () => { await syncHotkeyListener(); setInputMonitoringGranted(await checkInputMonitoring()); }}>{config.ui_lang === "zh" ? "重试" : "Retry"}</button>
+                  {IS_MAC_BUILD && (
+                    <>
+                      <div className="settings-row">
+                        <div className="settings-info">
+                          <div className="settings-name">{t("accessibility")}</div>
+                          <div className="settings-desc">{t("accessibility_desc")}</div>
                         </div>
-                    }
-                  </div>
+                        {accessibilityGranted
+                          ? <span style={{ fontSize: "0.8rem", color: "var(--fg-muted)", fontWeight: 600 }}>{t("accessibility_granted")} ✓</span>
+                          : <div style={{ display: "flex", gap: 6 }}>
+                              <button className="secondary-btn-sm" onClick={() => openPrivacySettings("accessibility")}>{t("grant_accessibility")}</button>
+                              <button className="secondary-btn-sm" onClick={async () => { await syncHotkeyListener(); setAccessibilityGranted(await checkAccessibility()); }}>{config.ui_lang === "zh" ? "重试" : "Retry"}</button>
+                            </div>
+                        }
+                      </div>
+                      <div className="settings-row">
+                        <div className="settings-info">
+                          <div className="settings-name">{t("input_monitoring")}</div>
+                          <div className="settings-desc">{t("input_monitoring_desc")}</div>
+                        </div>
+                        {inputMonitoringGranted
+                          ? <span style={{ fontSize: "0.8rem", color: "var(--fg-muted)", fontWeight: 600 }}>{t("accessibility_granted")} ✓</span>
+                          : <div style={{ display: "flex", gap: 6 }}>
+                              <button className="secondary-btn-sm" onClick={() => openPrivacySettings("input_monitoring")}>{t("grant_accessibility")}</button>
+                              <button className="secondary-btn-sm" onClick={async () => { await syncHotkeyListener(); setInputMonitoringGranted(await checkInputMonitoring()); }}>{config.ui_lang === "zh" ? "重试" : "Retry"}</button>
+                            </div>
+                        }
+                      </div>
+                    </>
+                  )}
                   <div className="settings-row">
                     <div className="settings-info"><div className="settings-name">{t("bilingual")}</div><div className="settings-desc">{t("bilingual_desc")}</div></div>
                     <Toggle checked={config.output_mode === "interleaved"} onChange={v => updateConfig({ output_mode: v ? "interleaved" : "translations_only" })} />

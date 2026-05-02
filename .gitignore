@@ -3,8 +3,10 @@
 node_modules/
 dist/
 build/
+tmp/
 .venv/
 venv/
 __pycache__/
 *.py[cod]
 /src-tauri/target
+/src-tauri/binaries/

@@ -22,12 +22,18 @@ def read_stdin_json() -> dict:
     return json.loads(raw)
 
 
+def encode_json(payload: dict) -> str:
+    # Keep bridge stdout ASCII-safe. Windows packaged apps may inherit a legacy
+    # code page, and non-ASCII translation output can otherwise fail to encode.
+    return json.dumps(payload, ensure_ascii=True)
+
+
 def write_json(payload: dict) -> None:
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False))
+    sys.stdout.write(encode_json(payload))
 
 
 def write_json_line(payload: dict) -> None:
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stdout.write(encode_json(payload) + "\n")
     sys.stdout.flush()
 
 
@@ -108,11 +114,32 @@ def cmd_ocr_clipboard() -> int:
     raise RuntimeError("Clipboard OCR is implemented only for macOS and Windows.")
 
 
+def cmd_hotkey_listener() -> int:
+    if not sys.platform.startswith("win"):
+        raise RuntimeError("The bridge hotkey listener is implemented only for Windows.")
+
+    from ui_windows.hotkey_windows import DoubleCtrlCListener
+
+    listener = DoubleCtrlCListener(
+        on_trigger=lambda: write_json_line({"event": "trigger", "hotkey": "ctrl+c ctrl+c"})
+    )
+    listener.run()
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Bridge Python services into Tauri commands")
     parser.add_argument(
         "command",
-        choices=["health", "get-config", "save-config", "translate", "translate-stream", "ocr-clipboard"],
+        choices=[
+            "health",
+            "get-config",
+            "save-config",
+            "translate",
+            "translate-stream",
+            "ocr-clipboard",
+            "hotkey-listener",
+        ],
     )
     args = parser.parse_args()
 
@@ -129,6 +156,8 @@ def main() -> int:
             return cmd_translate_stream()
         if args.command == "ocr-clipboard":
             return cmd_ocr_clipboard()
+        if args.command == "hotkey-listener":
+            return cmd_hotkey_listener()
     except Exception as exc:
         error_payload = {
             "error": str(exc),
@@ -136,7 +165,7 @@ def main() -> int:
             "python": sys.executable,
             "python3_in_path": shutil.which("python3"),
         }
-        if args.command == "translate-stream":
+        if args.command in {"translate-stream", "hotkey-listener"}:
             write_json_line(
                 {
                     "event": "error",

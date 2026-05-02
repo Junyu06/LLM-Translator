@@ -1,15 +1,20 @@
 {
   "name": "translator-react-tauri",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "npm run build:frontend",
+    "build:frontend": "tsc && vite build",
+    "build:bridge": "npm run build:bridge:windows",
+    "build:bridge:windows": "node scripts/build-python-bridge.mjs",
     "preview": "vite preview",
     "tauri:preflight": "node scripts/check-tauri-env.mjs",
     "tauri:dev": "npm run tauri:preflight && tauri dev",
-    "tauri:build": "npm run tauri:preflight && tauri build"
+    "tauri:build": "npm run tauri:preflight && tauri build",
+    "tauri:build:windows": "npm run tauri:preflight && npm run build:bridge:windows && tauri build --config src-tauri/tauri.windows-bridge.conf.json",
+    "build:windows": "npm run tauri:build:windows"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

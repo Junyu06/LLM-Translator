@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import fields
 import json
 import os
 import sys
 from pathlib import Path
 
 from .models import AppConfig
+
+APP_CONFIG_FIELDS = {field.name for field in fields(AppConfig)}
 
 
 def get_config_path() -> Path:
@@ -26,7 +29,8 @@ class ConfigStore:
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except Exception:
             return AppConfig()
-        return AppConfig(**{**AppConfig().to_dict(), **data})
+        known_values = {key: value for key, value in data.items() if key in APP_CONFIG_FIELDS}
+        return AppConfig(**{**AppConfig().to_dict(), **known_values})
 
     def save(self, config: AppConfig) -> AppConfig:
         self.path.parent.mkdir(parents=True, exist_ok=True)
