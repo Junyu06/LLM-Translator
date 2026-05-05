@@ -1,0 +1,2 @@
+db932afac06d1e9b30e75fd56c9d2529f41af27b77eef31d5723f2a62c4ef004  Translator_0.2.0_aarch64.dmg
+22d70d203672ed276bc6c7bbe4ce0b7717c2d4fdfd390a10d210494b6e243ee7  Translator_0.2.0_x64-setup.exe
