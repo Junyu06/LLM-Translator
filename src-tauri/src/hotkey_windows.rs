@@ -49,6 +49,10 @@ impl WindowsHotkeyListener {
 
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else {
+                    crate::record_hotkey_listener_error(
+                        &app_for_thread,
+                        "Failed to read Windows hotkey listener output.".to_string(),
+                    );
                     let _ = app_for_thread.emit(
                         EVENT_HOTKEY_ERROR,
                         json!({ "message": "Failed to read Windows hotkey listener output." }),
@@ -72,6 +76,7 @@ impl WindowsHotkeyListener {
                             .and_then(Value::as_str)
                             .or_else(|| payload.get("error").and_then(Value::as_str))
                             .unwrap_or("Windows hotkey listener failed.");
+                        crate::record_hotkey_listener_error(&app_for_thread, message.to_string());
                         let _ = app_for_thread.emit(EVENT_HOTKEY_ERROR, json!({ "message": message }));
                         eprintln!("hotkey_windows: {message}");
                     }

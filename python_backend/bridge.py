@@ -1,18 +1,60 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import shutil
 import sys
+from typing import Any
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from python_backend.config import ConfigStore
-from python_backend.models import AppConfig, TranslationRequest
-from python_backend.services.translation_service import TranslationService
+from python_backend.models import AppConfig
+
+
+def startup_log(stage: str, details: str | None = None) -> None:
+    if os.getenv("TRANSLATOR_STARTUP_LOG") != "1" and not os.getenv("TRANSLATOR_STARTUP_LOG_FILE"):
+        return
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    line = f"{timestamp} stage={stage}"
+    if details:
+        line += f" details={details}"
+    line += "\n"
+
+    if os.getenv("TRANSLATOR_STARTUP_LOG") == "1":
+        sys.stderr.write(line)
+        sys.stderr.flush()
+
+    log_file = os.getenv("TRANSLATOR_STARTUP_LOG_FILE")
+    if log_file:
+        try:
+            with open(log_file, "a", encoding="utf-8") as handle:
+                handle.write(line)
+        except OSError as exc:
+            if os.getenv("TRANSLATOR_STARTUP_LOG") == "1":
+                sys.stderr.write(f"startup_log_file_error path={log_file} error={exc}\n")
+                sys.stderr.flush()
+
+
+def get_translation_types() -> tuple[type, type]:
+    from python_backend.models import TranslationRequest
+    from python_backend.services.translation_service import TranslationService
+
+    return TranslationRequest, TranslationService
+
+
+def get_translation_service() -> Any:
+    _, TranslationService = get_translation_types()
+
+    return TranslationService()
+
+
+startup_log("bridge_import_complete")
 
 
 def read_stdin_json() -> dict:
@@ -57,16 +99,18 @@ def cmd_save_config() -> int:
 
 def cmd_translate() -> int:
     payload = read_stdin_json()
+    TranslationRequest, _ = get_translation_types()
     request = TranslationRequest(**payload)
-    response = TranslationService().translate(request)
+    response = get_translation_service().translate(request)
     write_json(response.to_dict())
     return 0
 
 
 def cmd_translate_stream() -> int:
     payload = read_stdin_json()
+    TranslationRequest, _ = get_translation_types()
     request = TranslationRequest(**payload)
-    for event in TranslationService().stream_translate(request):
+    for event in get_translation_service().stream_translate(request):
         write_json_line(event)
     return 0
 
@@ -142,6 +186,7 @@ def main() -> int:
         ],
     )
     args = parser.parse_args()
+    startup_log("command_dispatch_start", args.command)
 
     try:
         if args.command == "health":
