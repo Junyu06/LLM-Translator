@@ -15,6 +15,32 @@ _MARKERS = [
     "Output:", "输出：", "输出:",
 ]
 
+_QUOTE_PAIRS = {
+    '"': '"',
+    "'": "'",
+    "“": "”",
+    "‘": "’",
+}
+
+
+def _strip_leading_marker(text: str) -> str:
+    stripped = text.lstrip()
+    for mk in sorted(_MARKERS, key=len, reverse=True):
+        if stripped.startswith(mk):
+            return stripped[len(mk):].strip()
+    return text
+
+
+def _strip_paired_wrapping_quotes(text: str) -> str:
+    stripped = text.strip()
+    if len(stripped) < 2:
+        return stripped
+
+    closing = _QUOTE_PAIRS.get(stripped[0])
+    if closing is not None and stripped[-1] == closing:
+        return stripped[1:-1].strip()
+    return stripped
+
 
 def extract_translation(raw: str, opt: PostProcessOptions = PostProcessOptions()) -> str:
     if raw is None:
@@ -23,17 +49,8 @@ def extract_translation(raw: str, opt: PostProcessOptions = PostProcessOptions()
     if not text:
         return ""
 
-    # 1) 尝试按 marker 抽取（取最后一个 marker 后面的内容更安全）
-    lowered = text  # 保持原样，不强制 lower（避免影响内容）
-    positions = []
-    for mk in _MARKERS:
-        idx = lowered.rfind(mk) if opt.prefer_last_marker else lowered.find(mk)
-        if idx != -1:
-            positions.append((idx, mk))
-
-    if positions:
-        idx, mk = max(positions, key=lambda x: x[0])  # 取最靠后的 marker
-        text = text[idx + len(mk):].strip()
+    # 1) 只在输出开头识别 marker，避免截断正文里的 "Translation:" 等内容。
+    text = _strip_leading_marker(text)
 
     # 2) 如果模型把“原文：...”也吐出来了，尝试截断掉原文块（保守策略）
     # 仅当出现明显标签时截断，避免误删正文
@@ -43,10 +60,7 @@ def extract_translation(raw: str, opt: PostProcessOptions = PostProcessOptions()
 
     # 3) 去掉成对引号包裹
     if opt.strip_quotes:
-        text = text.strip()
-        text = re.sub(r'^\s*[\"“”‘’\']\s*', "", text)
-        text = re.sub(r'\s*[\"“”‘’\']\s*$', "", text)
-        text = text.strip()
+        text = _strip_paired_wrapping_quotes(text)
 
     # 4) 最后清理多余空白
     text = re.sub(r"[ \t]+\n", "\n", text)
