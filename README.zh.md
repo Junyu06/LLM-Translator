@@ -56,6 +56,17 @@ Backend / 推理层
 
 - macOS：配置存储在 `~/Library/Application Support/Translator/ui_config.json`
 - Windows：配置存储在 `%APPDATA%/Translator/ui_config.json`
+- 如果配置文件无法读取或 JSON 损坏，Translator 会在原文件旁写入不覆盖旧证据的 `.corrupt` 备份，然后加载默认配置。
+
+## 开发验证
+
+```bash
+python3 -m unittest discover -s tests -v
+npm run build:frontend
+cargo check --manifest-path src-tauri/Cargo.toml
+```
+
+设置 `TRANSLATOR_STARTUP_LOG=1`，并可选设置 `TRANSLATOR_STARTUP_LOG_FILE=<path>`，可以查看 Python bridge 启动阶段日志。
 
 ## 限制与取舍
 
@@ -65,6 +76,6 @@ Backend / 推理层
 
 ## Roadmap
 
-- 更好的长文本分段与上下文控制
+- 继续打磨长文本分段与上下文控制
 - 术语表/词汇控制
 - 进一步抽象后端，方便切换到其他引擎

@@ -3,6 +3,7 @@
 审计日期：2026-07-07  
 审计范围：静态代码审查 + macOS 本机命令验证；未在 Windows 真机实测。  
 执行原则：本轮只诊断，不做行为变更。
+修复状态：fix-1 `ff465ab`（启动性能与可观测性）、fix-2 `d31d386`（翻译正确性）、fix-3 `af931c3`（错误处理与前端状态韧性）、fix-4 `docs/plans/2026-07-07-fix-4-pipeline-unification.md` 对应 worker 分支提交组（管线统一与收尾，最终 main SHA 见队列回写）。
 
 ## 摘要
 
@@ -194,9 +195,10 @@ winget list "Microsoft Edge WebView2 Runtime"
     - 建议：timeout ref + cleanup，或 status token/version guard。
 
 18. **NSIS hook 按进程名 broad kill 并固定 sleep**
-    - 证据：`src-tauri/windows/installer-hooks.nsh:1-13` kill `translator-bridge.exe` 后固定 `Sleep 500`。
-    - 影响：升级/卸载时可能误伤同名进程，且 500ms 不一定足够。
-    - 建议：优先 app-owned PID/mutex/window signal；轮询退出，设 bounded timeout。
+   - 证据：`src-tauri/windows/installer-hooks.nsh:1-13` kill `translator-bridge.exe` 后固定 `Sleep 500`。
+   - 影响：升级/卸载时可能误伤同名进程，且 500ms 不一定足够。
+   - 建议：优先 app-owned PID/mutex/window signal；轮询退出，设 bounded timeout。
+   - 修复状态：fix-4 已移除 `KillProcess*` 和固定 `Sleep 500`，改为 bounded wait loop；本 worker 未在 Windows installer 上实测。
 
 ## 改进机会 Top 10
 

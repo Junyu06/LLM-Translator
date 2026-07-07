@@ -24,7 +24,17 @@
 
 ## Validation
 
+- Normal backend validation on macOS/Linux: `python3 -m unittest discover -s tests -v`.
+- Frontend validation: `/opt/homebrew/bin/npm run build:frontend` on the Mac mini, or `npm run build:frontend` when `npm` is on PATH.
+- Tauri validation: `~/.cargo/bin/cargo check --manifest-path src-tauri/Cargo.toml` on the Mac mini, or `cargo check --manifest-path src-tauri/Cargo.toml` when `cargo` is on PATH.
 - Before calling a Windows package ready, run `npm run tauri:build:windows`.
 - Verify the bridge executable responds to `src-tauri/binaries/translator-bridge/translator-bridge.exe health`.
 - Verify generated installer manifests include `translator-bridge` directory entries.
 - Run backend unit tests with `venv\Scripts\python.exe -m unittest discover -s tests -v`.
+
+## Current Reliability Notes
+
+- `health`, `get-config`, and `save-config` must remain lightweight and avoid importing the translation service.
+- Set `TRANSLATOR_STARTUP_LOG=1` and optionally `TRANSLATOR_STARTUP_LOG_FILE=<path>` to inspect bridge startup stages.
+- Corrupt config files are backed up with no-clobber `.corrupt` suffixes and then defaults are loaded.
+- The Windows NSIS hook waits for `translator-bridge.exe` to exit with a bounded loop; this hook was statically updated on macOS and still needs Windows installer verification before release.

@@ -96,6 +96,20 @@ Notes:
 - **Windows**:  
   `%APPDATA%/Translator/ui_config.json`
 
+If the config file is unreadable or malformed, Translator backs it up beside the original file with a no-clobber `.corrupt` suffix and loads defaults.
+
+---
+
+## Development Validation
+
+```bash
+python3 -m unittest discover -s tests -v
+npm run build:frontend
+cargo check --manifest-path src-tauri/Cargo.toml
+```
+
+Set `TRANSLATOR_STARTUP_LOG=1` and optionally `TRANSLATOR_STARTUP_LOG_FILE=<path>` to inspect Python bridge startup stages.
+
 ---
 
 ## Limitations & Trade-offs
@@ -171,4 +185,4 @@ Then run:
 npm run tauri:dev
 ```
 
-This is still not full feature parity with the Tk apps. Tray behavior, clipboard translation, and the main Markdown-capable desktop UI are now present in the new shell, while some native hotkey/OCR/packaging details still belong to later phases.
+This is still not full feature parity with the Tk apps. Tray behavior, clipboard translation, Markdown-capable desktop UI, backend error recovery, and config/history resilience are now present in the new shell, while some native OCR and Windows installer behavior still need release-machine verification.
