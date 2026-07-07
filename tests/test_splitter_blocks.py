@@ -53,6 +53,24 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
             "- item one\n  continuation line\n\n  second paragraph\n- item two",
         )
 
+    def test_groups_list_with_lazy_continuation(self):
+        text = "Before\n\n- item one\ncontinued line\n- item two\n\nAfter"
+
+        segments = split_markdown_blocks(text)
+
+        self.assertEqual([segment.kind for segment in segments], ["text", "list", "text"])
+        self.assertTrue(segments[1].protected)
+        self.assertEqual(segments[1].text, "- item one\ncontinued line\n- item two")
+
+    def test_groups_blockquote_with_lazy_continuation(self):
+        text = "Before\n\n> quoted line\nlazy continuation\n> quoted again\n\nAfter"
+
+        segments = split_markdown_blocks(text)
+
+        self.assertEqual([segment.kind for segment in segments], ["text", "blockquote", "text"])
+        self.assertTrue(segments[1].protected)
+        self.assertEqual(segments[1].text, "> quoted line\nlazy continuation\n> quoted again")
+
 
 if __name__ == "__main__":
     unittest.main()

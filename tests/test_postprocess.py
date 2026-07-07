@@ -19,6 +19,15 @@ class PostProcessTests(unittest.TestCase):
 
         self.assertEqual(extract_translation(raw), raw)
 
+    def test_marker_removal_can_be_disabled(self):
+        self.assertEqual(
+            extract_translation(
+                "Translation: # Title",
+                PostProcessOptions(remove_leading_labels=False, strip_quotes=False),
+            ),
+            "Translation: # Title",
+        )
+
     def test_paired_wrapping_quotes_are_removed(self):
         self.assertEqual(extract_translation('"Hello"'), "Hello")
         self.assertEqual(extract_translation("'Hello'"), "Hello")

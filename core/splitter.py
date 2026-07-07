@@ -132,6 +132,15 @@ def _is_table_start(lines: List[str], index: int) -> bool:
     )
 
 
+def _starts_non_lazy_block(lines: List[str], index: int) -> bool:
+    line = lines[index]
+    return (
+        _FENCE_RE.match(line) is not None
+        or _is_indented(line)
+        or _is_table_start(lines, index)
+    )
+
+
 def _take_fenced_code(lines: List[str], start: int) -> tuple[List[str], int]:
     first = lines[start]
     match = _FENCE_RE.match(first)
@@ -192,6 +201,10 @@ def _take_blockquote(lines: List[str], start: int) -> tuple[List[str], int]:
             block.append(line)
             index += 1
             continue
+        if not _is_blank(line) and not _starts_non_lazy_block(lines, index):
+            block.append(line)
+            index += 1
+            continue
         if _is_blank(line) and index + 1 < len(lines) and lines[index + 1].lstrip().startswith(">"):
             block.append(line)
             index += 1
@@ -208,6 +221,10 @@ def _take_list(lines: List[str], start: int) -> tuple[List[str], int]:
     while index < len(lines):
         line = lines[index]
         if _is_list_marker(line) or _is_list_continuation(line):
+            block.append(line)
+            index += 1
+            continue
+        if not _is_blank(line) and not _starts_non_lazy_block(lines, index):
             block.append(line)
             index += 1
             continue

@@ -58,8 +58,8 @@ class TranslationServiceTests(unittest.TestCase):
     def test_markdown_mode_splits_prose_blocks_and_passthrough_protected_blocks(self, backend_cls, build_prompt_mock):
         backend = backend_cls.return_value
         backend.stream_generate.side_effect = [
-            iter(["译文：第一段"]),
-            iter(["译文：第二段"]),
+            iter(["第一段"]),
+            iter(["第二段"]),
         ]
         build_prompt_mock.side_effect = lambda text, opt: f"{opt.preset}:{text}"
 

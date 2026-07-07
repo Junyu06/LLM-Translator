@@ -50,7 +50,8 @@ def extract_translation(raw: str, opt: PostProcessOptions = PostProcessOptions()
         return ""
 
     # 1) 只在输出开头识别 marker，避免截断正文里的 "Translation:" 等内容。
-    text = _strip_leading_marker(text)
+    if opt.remove_leading_labels:
+        text = _strip_leading_marker(text)
 
     # 2) 如果模型把“原文：...”也吐出来了，尝试截断掉原文块（保守策略）
     # 仅当出现明显标签时截断，避免误删正文
