@@ -60,7 +60,10 @@ class APIServerMalformedPayloadTests(unittest.TestCase):
 
         self.assertEqual(response.status, HTTPStatus.BAD_REQUEST)
         self.assertEqual(response.headers.get_content_type(), "application/json")
-        body = json.loads(response.read().decode("utf-8"))
+        try:
+            body = json.loads(response.read().decode("utf-8"))
+        finally:
+            response.close()
         self.assertIn("error", body)
 
     def test_config_malformed_payload_returns_json_400(self) -> None:
@@ -68,7 +71,10 @@ class APIServerMalformedPayloadTests(unittest.TestCase):
 
         self.assertEqual(response.status, HTTPStatus.BAD_REQUEST)
         self.assertEqual(response.headers.get_content_type(), "application/json")
-        body = json.loads(response.read().decode("utf-8"))
+        try:
+            body = json.loads(response.read().decode("utf-8"))
+        finally:
+            response.close()
         self.assertIn("error", body)
 
 
