@@ -189,6 +189,17 @@ export async function getHotkeyStatus(): Promise<HotkeyStatus | null> {
   }
 }
 
+export async function onHotkeyError(callback: (message: string) => void): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => {};
+  }
+
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<{ message?: string }>("translator://hotkey-error", (event) => {
+    callback(event.payload?.message || "Windows hotkey listener failed.");
+  });
+}
+
 export async function showMainWindow(): Promise<void> {
   if (!isTauriRuntime()) {
     return;

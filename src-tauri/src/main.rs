@@ -49,6 +49,8 @@ struct AppState {
     translation_events: Mutex<HashMap<u64, Vec<Value>>>,
     hotkey_listener: Mutex<Option<HotkeyListener>>,
     hotkey_status: Mutex<HotkeyStatus>,
+    #[cfg(target_os = "windows")]
+    hotkey_starting: AtomicBool,
     frontend_ready: AtomicBool,
     pending_clipboard_triggers: AtomicU64,
 }
@@ -795,12 +797,29 @@ fn set_hotkey_status(state: &AppState, status: &str, error: Option<String>) {
 }
 
 #[cfg(target_os = "windows")]
+pub(crate) fn record_hotkey_listener_error(app: &AppHandle, message: String) {
+    let state = app.state::<AppState>();
+    set_hotkey_status(&state, "error", Some(message));
+}
+
+#[cfg(target_os = "windows")]
 fn start_hotkey_listener_async(app: AppHandle) {
+    let state = app.state::<AppState>();
+    if state
+        .hotkey_starting
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+    set_hotkey_status(&state, "starting", None);
+
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
         if let Err(error) = spawn_hotkey_listener(&app, &state) {
             eprintln!("main: Windows hotkey listener failed: {error}");
         }
+        state.hotkey_starting.store(false, Ordering::Release);
     });
 }
 
@@ -1232,6 +1251,8 @@ fn main() {
                 state: "unknown".to_string(),
                 error: None,
             }),
+            #[cfg(target_os = "windows")]
+            hotkey_starting: AtomicBool::new(false),
             frontend_ready: AtomicBool::new(false),
             pending_clipboard_triggers: AtomicU64::new(0),
         })

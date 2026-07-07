@@ -98,6 +98,15 @@ class BridgeStartupImportTests(unittest.TestCase):
         self.assertIn("stage=bridge_import_complete", log_text)
         self.assertIn("stage=command_dispatch_start details=health", log_text)
 
+    def test_invalid_startup_log_file_does_not_break_health(self) -> None:
+        result = self.run_bridge(
+            "health",
+            extra_env={"TRANSLATOR_STARTUP_LOG_FILE": "/no/such/dir/translator.log"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('"status": "ok"', result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

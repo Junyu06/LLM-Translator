@@ -32,8 +32,13 @@ def startup_log(stage: str, details: str | None = None) -> None:
 
     log_file = os.getenv("TRANSLATOR_STARTUP_LOG_FILE")
     if log_file:
-        with open(log_file, "a", encoding="utf-8") as handle:
-            handle.write(line)
+        try:
+            with open(log_file, "a", encoding="utf-8") as handle:
+                handle.write(line)
+        except OSError as exc:
+            if os.getenv("TRANSLATOR_STARTUP_LOG") == "1":
+                sys.stderr.write(f"startup_log_file_error path={log_file} error={exc}\n")
+                sys.stderr.flush()
 
 
 def get_translation_types() -> tuple[type, type]:

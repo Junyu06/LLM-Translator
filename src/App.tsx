@@ -7,6 +7,7 @@ import {
   isTauriRuntime,
   loadInitialConfig,
   notifyFrontendReady,
+  onHotkeyError,
   readClipboardText,
   refreshBackendStatus,
   requestAccessibility,
@@ -317,6 +318,7 @@ export default function App() {
 
   useEffect(() => {
     let canceled = false;
+    let unlistenHotkeyError: (() => void) | null = null;
 
     if (isTauriRuntime()) {
       void notifyFrontendReady().catch((error) => {
@@ -324,6 +326,19 @@ export default function App() {
         if (!canceled) {
           setStatus(`Frontend ready: ${error instanceof Error ? error.message : "failed"}`);
         }
+      });
+      void onHotkeyError((message) => {
+        if (!canceled) {
+          setHotkeyStatus({ state: "error", error: message });
+        }
+      }).then((unlisten) => {
+        if (canceled) {
+          unlisten();
+          return;
+        }
+        unlistenHotkeyError = unlisten;
+      }).catch((error) => {
+        console.error(error);
       });
     }
 
@@ -368,6 +383,9 @@ export default function App() {
 
     return () => {
       canceled = true;
+      if (unlistenHotkeyError) {
+        unlistenHotkeyError();
+      }
       stopPermissionPolling();
     };
   }, []);
