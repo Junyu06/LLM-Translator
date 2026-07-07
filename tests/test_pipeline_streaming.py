@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from backend.errors import BackendRequestError
-from core.pipeline import OutputMode, PipelineOptions, PipelineStreamUpdate, SplitMode, iter_streaming_pipeline
+from core.pipeline import PipelineOptions, PipelineStreamUpdate, SplitMode, iter_pipeline, iter_streaming_pipeline, run_pipeline
 from core.prompt import PromptPreset
 
 
@@ -58,6 +58,30 @@ class StreamingPipelineTests(unittest.TestCase):
 
         self.assertEqual(updates[-1].segment_status, "error")
         self.assertEqual(updates[-1].error.code, "invalid_backend_json")
+
+    def test_run_pipeline_passthroughs_markdown_protected_blocks(self) -> None:
+        opt = PipelineOptions(split_mode=SplitMode.MARKDOWN, skip_empty_segments=False)
+
+        pairs = run_pipeline(
+            "```python\nprint('keep')\n```",
+            generate=lambda prompt: "translated code",
+            opt=opt,
+        )
+
+        self.assertEqual(pairs[0].target, "```python\nprint('keep')\n```")
+
+    def test_iter_pipeline_passthroughs_markdown_protected_blocks(self) -> None:
+        opt = PipelineOptions(split_mode=SplitMode.MARKDOWN, skip_empty_segments=False)
+
+        pairs = list(
+            iter_pipeline(
+                "```python\nprint('keep')\n```",
+                generate=lambda prompt: "translated code",
+                opt=opt,
+            )
+        )
+
+        self.assertEqual(pairs[0].target, "```python\nprint('keep')\n```")
 
 
 if __name__ == "__main__":

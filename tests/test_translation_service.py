@@ -133,6 +133,23 @@ class TranslationServiceTests(unittest.TestCase):
         with self.assertRaises(BackendRequestError):
             service.translate(TranslationRequest(text="hello"))
 
+    @patch("python_backend.services.translation_service.OllamaBackend")
+    def test_stream_translate_emits_one_error_event_for_unexpected_error(self, backend_cls):
+        backend = backend_cls.return_value
+        backend.stream_generate.side_effect = ValueError("boom")
+
+        service = TranslationService()
+        stream = service.stream_translate(TranslationRequest(text="hello"))
+        events = []
+
+        with self.assertRaises(ValueError):
+            while True:
+                events.append(next(stream))
+
+        error_events = [event for event in events if event.get("event") == "error"]
+        self.assertEqual(len(error_events), 1)
+        self.assertEqual(error_events[0]["code"], "backend_error")
+
 
 if __name__ == "__main__":
     unittest.main()

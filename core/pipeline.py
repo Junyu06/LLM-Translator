@@ -119,6 +119,23 @@ def run_pipeline(
     )
 
     for i, seg in enumerate(segments):
+        if seg.protected or (not seg.text.strip() and not opt.skip_empty_segments):
+            pairs.append(AlignedPair(source=seg.text, target=seg.text))
+            if report is not None:
+                report.reports.append(
+                    SegmentReport(
+                        index=i,
+                        source=seg.text,
+                        expected_context=seg.context or "",
+                        prompt="",
+                        raw=seg.text,
+                        extracted=seg.text,
+                        prompt_contains_context=True,
+                        used_contextual_template=True,
+                    )
+                )
+            continue
+
         if opt.skip_empty_segments and not seg.text.strip():
             continue
 
@@ -185,6 +202,10 @@ def iter_pipeline(
     segments = make_segments(text, opt)
 
     for seg in segments:
+        if seg.protected or (not seg.text.strip() and not opt.skip_empty_segments):
+            yield AlignedPair(source=seg.text, target=seg.text)
+            continue
+
         if opt.skip_empty_segments and not seg.text.strip():
             continue
 

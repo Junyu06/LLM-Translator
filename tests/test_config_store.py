@@ -47,6 +47,21 @@ class ConfigStoreCorruptFileTests(unittest.TestCase):
             self.assertEqual(first_backup.read_text(encoding="utf-8"), "{first")
             self.assertEqual(second_backup.read_text(encoding="utf-8"), "{second")
 
+    def test_load_backs_up_semantically_invalid_config_and_returns_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "ui_config.json"
+            config_text = '{"theme":"sepia"}'
+            config_path.write_text(config_text, encoding="utf-8")
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                config = ConfigStore(config_path).load()
+
+            self.assertEqual(config, AppConfig())
+            self.assertIn("Translator config corrupt:", stderr.getvalue())
+            corrupt_path = config_path.with_suffix(config_path.suffix + ".corrupt")
+            self.assertEqual(corrupt_path.read_text(encoding="utf-8"), config_text)
+
 
 if __name__ == "__main__":
     unittest.main()

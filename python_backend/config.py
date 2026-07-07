@@ -43,6 +43,8 @@ class ConfigStore:
             data = json.loads(raw_bytes.decode("utf-8"))
             if not isinstance(data, dict):
                 raise TypeError("Config file must contain a JSON object.")
+            known_values = {key: value for key, value in data.items() if key in APP_CONFIG_FIELDS}
+            return AppConfig(**{**AppConfig().to_dict(), **known_values})
         except Exception:
             corrupt_path = corrupt_backup_path(self.path)
             try:
@@ -60,8 +62,6 @@ class ConfigStore:
                     file=sys.stderr,
                 )
             return AppConfig()
-        known_values = {key: value for key, value in data.items() if key in APP_CONFIG_FIELDS}
-        return AppConfig(**{**AppConfig().to_dict(), **known_values})
 
     def save(self, config: AppConfig) -> AppConfig:
         self.path.parent.mkdir(parents=True, exist_ok=True)

@@ -96,6 +96,7 @@ class TranslationService:
             "segment_status": "queued",
         }
 
+        emitted_error_event = False
         try:
             for update in iter_streaming_pipeline(
                 text,
@@ -130,6 +131,7 @@ class TranslationService:
                         "segment_status": "error",
                         "segments": [{"source": pair.source, "target": pair.target} for pair in update.pairs],
                     }
+                    emitted_error_event = True
                     continue
 
                 yield self._update_event(
@@ -149,7 +151,7 @@ class TranslationService:
         except BackendError:
             raise
         except Exception as exc:
-            if not isinstance(exc, BackendError):
+            if not isinstance(exc, BackendError) and not emitted_error_event:
                 yield {
                     "event": "error",
                     "code": "backend_error",
