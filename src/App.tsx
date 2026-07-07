@@ -166,6 +166,44 @@ const defaultConfig: ExtendedConfig = {
 };
 
 const PERMISSION_AUTO_REQUEST_KEY = "translator_permission_autorequest_v1";
+const HISTORY_STORAGE_KEY = "translator_history_v2";
+
+const isHistoryItem = (value: unknown): value is HistoryItem => {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Partial<HistoryItem>;
+  return (
+    typeof item.id === "string" &&
+    typeof item.source === "string" &&
+    typeof item.target === "string" &&
+    typeof item.timestamp === "number"
+  );
+};
+
+const backupBadStorageValue = (key: string, value: string) => {
+  try {
+    localStorage.setItem(`${key}_corrupt_${Date.now()}`, value);
+    localStorage.removeItem(key);
+  } catch (error) {
+    console.error(error);
+  }
+};
+
+const loadHistoryFromStorage = (): HistoryItem[] => {
+  const saved = localStorage.getItem(HISTORY_STORAGE_KEY);
+  if (!saved) return [];
+
+  try {
+    const parsed = JSON.parse(saved);
+    if (Array.isArray(parsed) && parsed.every(isHistoryItem)) {
+      return parsed;
+    }
+  } catch (error) {
+    console.error(error);
+  }
+
+  backupBadStorageValue(HISTORY_STORAGE_KEY, saved);
+  return [];
+};
 
 const Toggle = ({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) => (
   <label className="switch"><input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} /><span className="slider"></span></label>
@@ -195,12 +233,12 @@ export default function App() {
   const scrollSyncReleaseRef = useRef<number | null>(null);
   const [accessibilityGranted, setAccessibilityGranted] = useState(true);
   const [inputMonitoringGranted, setInputMonitoringGranted] = useState(true);
-  const [history, setHistory] = useState<HistoryItem[]>(() => {
-    const saved = localStorage.getItem("translator_history_v2");
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [history, setHistory] = useState<HistoryItem[]>(() => loadHistoryFromStorage());
   
   const currentJobIdRef = useRef<number | null>(null);
+  const inFlightRef = useRef(false);
+  const statusRef = useRef(status);
+  const copyStatusTimeoutRef = useRef<number | null>(null);
   const historyListRef = useRef<HTMLDivElement>(null);
   const historyScrollRef = useRef(0);
   const permissionPollRef = useRef<number | null>(null);
@@ -230,6 +268,29 @@ export default function App() {
       window.clearInterval(permissionPollRef.current);
       permissionPollRef.current = null;
     }
+  };
+
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
+  const clearCopyStatusTimeout = () => {
+    if (copyStatusTimeoutRef.current !== null) {
+      window.clearTimeout(copyStatusTimeoutRef.current);
+      copyStatusTimeoutRef.current = null;
+    }
+  };
+
+  const showCopiedStatus = () => {
+    const copiedLabel = t("copied");
+    clearCopyStatusTimeout();
+    setStatus(copiedLabel);
+    copyStatusTimeoutRef.current = window.setTimeout(() => {
+      copyStatusTimeoutRef.current = null;
+      if (!inFlightRef.current && statusRef.current === copiedLabel) {
+        setStatus(t("done"));
+      }
+    }, 2000);
   };
 
   const startPermissionPolling = (initialAccessibility: boolean, initialInputMonitoring: boolean) => {
@@ -387,10 +448,11 @@ export default function App() {
         unlistenHotkeyError();
       }
       stopPermissionPolling();
+      clearCopyStatusTimeout();
     };
   }, []);
 
-  useEffect(() => { localStorage.setItem("translator_history_v2", JSON.stringify(history)); }, [history]);
+  useEffect(() => { localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history)); }, [history]);
 
   const releaseScrollSyncLock = () => {
     if (scrollSyncReleaseRef.current !== null) {
@@ -446,7 +508,8 @@ export default function App() {
   };
 
   const runTranslation = async (text: string) => {
-    if (!text.trim() || isSubmitting) return;
+    if (!text.trim() || inFlightRef.current) return;
+    inFlightRef.current = true;
     setInput(text); setOutput(""); setSegments([]); setIsSubmitting(true); setProgressRatio(0);
     const request: TranslationRequest = {
       text,
@@ -464,7 +527,7 @@ export default function App() {
       try {
         const jobId = await startTranslationStream(request);
         currentJobIdRef.current = jobId;
-        pollProgress(jobId, text);
+        void pollProgress(jobId, text);
         return;
       } catch (err) { console.error(err); }
     }
@@ -474,7 +537,7 @@ export default function App() {
       if (resp.segments) setSegments(resp.segments);
       addToHistory(text, resp.output_text); 
       setStatus(t("done"));
-    } catch (err: any) { setStatus(`Error: ${err.message}`); } finally { setIsSubmitting(false); setProgressRatio(100); }
+    } catch (err: any) { setStatus(`Error: ${err.message}`); } finally { inFlightRef.current = false; setIsSubmitting(false); setProgressRatio(100); }
   };
 
   runTranslationRef.current = runTranslation;
@@ -499,33 +562,48 @@ export default function App() {
   const pollProgress = async (jobId: number, sourceText: string) => {
     let finalOutput = "";
     let doneSegs: { source: string; target: string }[] = [];
-    while (currentJobIdRef.current === jobId) {
-      const events = await takeTranslationEvents<any>(jobId);
-      for (const ev of events) {
-        if (ev.event === "update" || ev.event === "completed") {
-          if (ev.output_text) { setOutput(ev.output_text); finalOutput = ev.output_text; }
-          if (ev.total_segments) setProgressRatio((ev.completed_segments / ev.total_segments) * 100);
-          // Real-time bilingual segment tracking
-          if (ev.active_segment_source) {
-            const status = ev.segment_status;
-            if (status === "completed" || status === "passthrough") {
-              doneSegs = [...doneSegs, { source: ev.active_segment_source, target: ev.active_segment_target }];
-              setSegments(doneSegs);
-            } else if (status === "streaming") {
-              setSegments([...doneSegs, { source: ev.active_segment_source, target: ev.active_segment_target }]);
+    try {
+      while (currentJobIdRef.current === jobId) {
+        const events = await takeTranslationEvents<any>(jobId);
+        for (const ev of events) {
+          if (ev.event === "update" || ev.event === "completed") {
+            if (ev.output_text) { setOutput(ev.output_text); finalOutput = ev.output_text; }
+            if (ev.total_segments) setProgressRatio((ev.completed_segments / ev.total_segments) * 100);
+            // Real-time bilingual segment tracking
+            if (ev.active_segment_source) {
+              const status = ev.segment_status;
+              if (status === "completed" || status === "passthrough") {
+                doneSegs = [...doneSegs, { source: ev.active_segment_source, target: ev.active_segment_target }];
+                setSegments(doneSegs);
+              } else if (status === "streaming") {
+                setSegments([...doneSegs, { source: ev.active_segment_source, target: ev.active_segment_target }]);
+              }
             }
           }
+          if (ev.event === "completed") { setIsSubmitting(false); inFlightRef.current = false; currentJobIdRef.current = null; setStatus(t("done")); addToHistory(sourceText, finalOutput); }
+          if (ev.event === "error" || ev.event === "canceled") { setIsSubmitting(false); inFlightRef.current = false; currentJobIdRef.current = null; setStatus(ev.message || "Failed"); }
         }
-        if (ev.event === "completed") { setIsSubmitting(false); currentJobIdRef.current = null; setStatus(t("done")); addToHistory(sourceText, finalOutput); }
-        if (ev.event === "error" || ev.event === "canceled") { setIsSubmitting(false); currentJobIdRef.current = null; setStatus(ev.message || "Failed"); }
+        await new Promise(r => setTimeout(r, 150));
       }
-      await new Promise(r => setTimeout(r, 150));
+    } catch (err: any) {
+      if (currentJobIdRef.current === jobId) {
+        setStatus(`Error: ${err?.message || "Polling failed"}`);
+      }
+    } finally {
+      if (currentJobIdRef.current === jobId) {
+        currentJobIdRef.current = null;
+      }
+      if (currentJobIdRef.current === null) {
+        inFlightRef.current = false;
+        setIsSubmitting(false);
+      }
     }
   };
 
   const stopTranslation = () => {
     const jobId = currentJobIdRef.current;
     currentJobIdRef.current = null;
+    inFlightRef.current = false;
     setIsSubmitting(false);
     setStatus("Stopped");
     if (jobId !== null) void cancelTranslation(jobId);
@@ -612,7 +690,7 @@ export default function App() {
             <div style={{ display: "flex", gap: 4 }}>
               <button className="icon-btn" onMouseDown={e => e.preventDefault()} onClick={() => { const next = !scrollLockedRef.current; scrollLockedRef.current = next; setScrollLocked(next); }} title={scrollLocked ? "Unlock scroll" : "Lock scroll sync"} style={scrollLocked ? { color: "var(--bg-accent)" } : undefined}>{scrollLocked ? <IconLock /> : <IconUnlock />}</button>
               <button className="icon-btn" onClick={() => setFullscreenPanel(fullscreenPanel === "output" ? null : "output")} title={fullscreenPanel === "output" ? "Exit fullscreen" : "Fullscreen"}>{fullscreenPanel === "output" ? <IconCollapse /> : <IconExpand />}</button>
-              <button className="icon-btn" onClick={async () => { try { await writeClipboardText(output); setStatus(t("copied")); setTimeout(() => setStatus(t("done")), 2000); } catch (err: any) { setStatus(`Copy Error: ${err.message}`); } }} disabled={!output}><IconCopy /></button>
+              <button className="icon-btn" onClick={async () => { try { await writeClipboardText(output); showCopiedStatus(); } catch (err: any) { setStatus(`Copy Error: ${err.message}`); } }} disabled={!output}><IconCopy /></button>
             </div>
           </div>
           <div ref={outputScrollRef} className="editor-content output-content" onScroll={e => { if (inputScrollRef.current) handleScrollSync(e.currentTarget, inputScrollRef.current); }}>

@@ -388,6 +388,7 @@ input:checked + .slider:before { transform: translateX(18px); }
 .history-delete-btn:hover { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
 
 .status-bar { position: fixed; bottom: 0; left: 0; right: 0; padding: 8px 24px; font-size: 0.75rem; color: var(--fg-subtle); display: flex; justify-content: space-between; pointer-events: none; }
+.progress-container { position: absolute; top: 0; left: 0; right: 0; height: 3px; overflow: hidden; background: var(--border-light); z-index: 2; }
 .progress-bar { height: 100%; background: var(--bg-accent); transition: width 0.3s ease; }
 .danger-text { color: #ef4444; font-weight: 700; font-size: 0.75rem; cursor: pointer; background: transparent; border: none; padding: 4px 8px; border-radius: var(--radius-sm); }
 
