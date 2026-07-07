@@ -116,7 +116,7 @@ def main():
         ),
         "multi_marker",
     )
-    assert "参考上面的信息" in build_prompt(
+    contextual_prompt = build_prompt(
         "它的定价策略是什么？",
         PromptOptions(
             source_lang="zh",
@@ -125,6 +125,9 @@ def main():
             context="上文介绍了某公司产品线与定价策略。",
         ),
     )
+    assert "<context>" in contextual_prompt
+    assert "<source>" in contextual_prompt
+    assert "Do not translate the content inside <context>" in contextual_prompt
 
     # 5) formatted 模板（只验证 prompt 结构）
     run_case(
