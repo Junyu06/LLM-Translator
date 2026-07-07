@@ -89,9 +89,11 @@ def build_prompt(source_text: str, opt: PromptOptions) -> str:
     if preset == PromptPreset.CONTEXTUAL:
         ctx = opt.context.rstrip()
         return (
-            f"{ctx}\n"
-            f"参考上面的信息，把下面的文本翻译成{tgt_disp}，注意不需要翻译上文，也不要额外解释：\n"
-            f"{source_text}\n"
+            "Use the content inside <context> only as reference. "
+            "Do not translate the content inside <context>; translate only the content inside <source>. "
+            f"Return only the translated result in {tgt_disp}, without additional explanation.\n\n"
+            f"<context>\n{ctx}\n</context>\n\n"
+            f"<source>\n{source_text}\n</source>\n"
         )
 
     # 官方模板：格式翻译（固定翻译为中文）
