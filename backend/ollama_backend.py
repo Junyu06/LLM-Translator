@@ -6,7 +6,7 @@ from enum import Enum
 import sys
 from typing import Any, Dict
 
-from .errors import BackendUnavailableError, BackendRequestError, ModelNotFoundError
+from .errors import BackendError, BackendUnavailableError, BackendRequestError, ModelNotFoundError
 
 
 class OllamaMode(str, Enum):
@@ -71,7 +71,8 @@ class OllamaBackend:
             import ollama  # type: ignore
         except Exception as e:
             raise BackendUnavailableError(
-                "Local mode requires `pip install ollama`."
+                "Local mode requires `pip install ollama`.",
+                code="dependency_missing",
             ) from e
 
         try:
@@ -84,9 +85,17 @@ class OllamaBackend:
             msg = resp.get("message", {})
             content = msg.get("content")
             if content is None:
-                raise BackendRequestError(f"Unexpected ollama.chat response: {resp}")
+                raise BackendRequestError(
+                    f"Unexpected ollama.chat response: {resp}",
+                    code="unexpected_backend_response",
+                )
             return content
-
+        except BackendError:
+            raise
+        except TimeoutError as e:
+            raise BackendRequestError(f"ollama.chat timed out: {e}", code="backend_timeout") from e
+        except OSError as e:
+            raise BackendUnavailableError(f"ollama.chat unavailable: {e}") from e
         except Exception as e:
             # ollama python client errors are not super standardized; keep message
             raise BackendRequestError(f"ollama.chat failed: {e}") from e
@@ -98,7 +107,8 @@ class OllamaBackend:
             import ollama  # type: ignore
         except Exception as e:
             raise BackendUnavailableError(
-                "Local mode requires `pip install ollama`."
+                "Local mode requires `pip install ollama`.",
+                code="dependency_missing",
             ) from e
 
         try:
@@ -113,6 +123,15 @@ class OllamaBackend:
                 content = msg.get("content")
                 if content:
                     yield content
+        except BackendError:
+            raise
+        except TimeoutError as e:
+            raise BackendRequestError(
+                f"ollama.chat(stream) timed out: {e}",
+                code="backend_timeout",
+            ) from e
+        except OSError as e:
+            raise BackendUnavailableError(f"ollama.chat(stream) unavailable: {e}") from e
         except Exception as e:
             raise BackendRequestError(f"ollama.chat(stream) failed: {e}") from e
 
@@ -150,14 +169,26 @@ class OllamaBackend:
             if e.code == 404:
                 raise ModelNotFoundError(msg) from e
             raise BackendRequestError(f"Ollama HTTP {e.code}: {msg}") from e
+        except TimeoutError as e:
+            raise BackendRequestError(f"Ollama HTTP timed out: {e}", code="backend_timeout") from e
         except urllib.error.URLError as e:
+            raise BackendUnavailableError(f"Ollama not reachable: {base}") from e
+        except json.JSONDecodeError as e:
+            raise BackendRequestError(
+                f"Invalid JSON from Ollama HTTP response: {e}",
+                code="invalid_backend_json",
+            ) from e
+        except OSError as e:
             raise BackendUnavailableError(f"Ollama not reachable: {base}") from e
 
         # Ollama /api/chat returns {"message": {"role": "...", "content": "..."}, ...}
         msg = obj.get("message", {})
         content = msg.get("content")
         if content is None:
-            raise BackendRequestError(f"Unexpected /api/chat response: {obj}")
+            raise BackendRequestError(
+                f"Unexpected /api/chat response: {obj}",
+                code="unexpected_backend_response",
+            )
         return content
 
     def _chat_http_stream(self, messages: list[dict]):
@@ -203,7 +234,16 @@ class OllamaBackend:
             if e.code == 404:
                 raise ModelNotFoundError(msg) from e
             raise BackendRequestError(f"Ollama HTTP {e.code}: {msg}") from e
+        except TimeoutError as e:
+            raise BackendRequestError(f"Ollama HTTP timed out: {e}", code="backend_timeout") from e
         except urllib.error.URLError as e:
+            raise BackendUnavailableError(f"Ollama not reachable: {base}") from e
+        except json.JSONDecodeError as e:
+            raise BackendRequestError(
+                f"Invalid JSON from Ollama HTTP stream: {e}",
+                code="invalid_backend_json",
+            ) from e
+        except OSError as e:
             raise BackendUnavailableError(f"Ollama not reachable: {base}") from e
 
     # Optional helpers (nice for UI)

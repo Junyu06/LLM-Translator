@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Iterator
 
-from backend import OllamaBackend, OllamaBackendOptions, OllamaMode
+from backend import BackendError, OllamaBackend, OllamaBackendOptions, OllamaMode
 from core import (
     AlignedPair,
     OutputMode,
@@ -126,44 +126,67 @@ class TranslationService:
             prompt = build_prompt(seg.text, seg_opt)
 
             raw = ""
-            for chunk in backend.stream_generate(prompt):
-                raw += chunk
+            try:
+                for chunk in backend.stream_generate(prompt):
+                    raw += chunk
+                    yield self._update_event(
+                        pairs=pairs + [AlignedPair(source=seg.text, target=raw)],
+                        output_mode=output_mode,
+                        join_with=join_with,
+                        collapse_newlines=request.collapse_newlines,
+                        detected_source_lang=detected_source_lang,
+                        completed_segments=index,
+                        total_segments=total_segments,
+                        partial=True,
+                        active_segment_index=index + 1,
+                        active_segment_source=seg.text,
+                        active_segment_target=raw,
+                        segment_status="streaming",
+                    )
+
+                post_opt = (
+                    PostProcessOptions(remove_leading_labels=False, strip_quotes=False)
+                    if is_markdown_mode
+                    else opt.post_opt
+                )
+                target = extract_translation(raw, post_opt)
+                pairs.append(AlignedPair(source=seg.text, target=target))
                 yield self._update_event(
-                    pairs=pairs + [AlignedPair(source=seg.text, target=raw)],
+                    pairs=pairs,
                     output_mode=output_mode,
                     join_with=join_with,
                     collapse_newlines=request.collapse_newlines,
                     detected_source_lang=detected_source_lang,
-                    completed_segments=index,
+                    completed_segments=index + 1,
                     total_segments=total_segments,
-                    partial=True,
+                    partial=False,
                     active_segment_index=index + 1,
                     active_segment_source=seg.text,
-                    active_segment_target=raw,
-                    segment_status="streaming",
+                    active_segment_target=target,
+                    segment_status="completed",
                 )
-
-            post_opt = (
-                PostProcessOptions(remove_leading_labels=False, strip_quotes=False)
-                if is_markdown_mode
-                else opt.post_opt
-            )
-            target = extract_translation(raw, post_opt)
-            pairs.append(AlignedPair(source=seg.text, target=target))
-            yield self._update_event(
-                pairs=pairs,
-                output_mode=output_mode,
-                join_with=join_with,
-                collapse_newlines=request.collapse_newlines,
-                detected_source_lang=detected_source_lang,
-                completed_segments=index + 1,
-                total_segments=total_segments,
-                partial=False,
-                active_segment_index=index + 1,
-                active_segment_source=seg.text,
-                active_segment_target=target,
-                segment_status="completed",
-            )
+            except BackendError as exc:
+                yield {
+                    "event": "error",
+                    "code": exc.code,
+                    "message": str(exc),
+                    "output_text": self._render_output(
+                        pairs + [AlignedPair(source=seg.text, target=raw)],
+                        output_mode,
+                        request.collapse_newlines,
+                        join_with,
+                    ),
+                    "completed_segments": index,
+                    "total_segments": total_segments,
+                    "detected_source_lang": detected_source_lang,
+                    "segment_index": index + 1,
+                    "active_segment_index": index + 1,
+                    "active_segment_source": seg.text,
+                    "active_segment_target": raw,
+                    "segment_status": "error",
+                    "segments": [{"source": pair.source, "target": pair.target} for pair in pairs],
+                }
+                raise
 
         response = TranslationResponse(
             output_text=self._render_output(pairs, output_mode, request.collapse_newlines, join_with),
