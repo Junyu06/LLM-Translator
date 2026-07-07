@@ -3,10 +3,13 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -45,6 +48,7 @@ struct AppState {
     translation: Mutex<Option<RunningTranslation>>,
     translation_events: Mutex<HashMap<u64, Vec<Value>>>,
     hotkey_listener: Mutex<Option<HotkeyListener>>,
+    hotkey_status: Mutex<HotkeyStatus>,
     frontend_ready: AtomicBool,
     pending_clipboard_triggers: AtomicU64,
 }
@@ -63,10 +67,46 @@ struct BackendStatus {
     error: Option<String>,
 }
 
+#[derive(Clone, Serialize)]
+struct HotkeyStatus {
+    state: String,
+    error: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct PythonHealth {
     status: String,
     python: String,
+}
+
+fn startup_log(stage: &str, details: Option<&str>) {
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let line = match details {
+        Some(details) if !details.is_empty() => {
+            format!("translator-startup ts_ms={timestamp_ms} stage={stage} details={details}")
+        }
+        _ => format!("translator-startup ts_ms={timestamp_ms} stage={stage}"),
+    };
+
+    eprintln!("{line}");
+
+    let Some(path) = std::env::var_os("TRANSLATOR_STARTUP_LOG_FILE") else {
+        return;
+    };
+    match fs::OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(mut file) => {
+            let _ = writeln!(file, "{line}");
+        }
+        Err(error) => {
+            eprintln!(
+                "translator-startup-log-file-error path={} error={error}",
+                PathBuf::from(path).display()
+            );
+        }
+    }
 }
 
 fn workspace_root() -> Result<PathBuf, String> {
@@ -146,7 +186,9 @@ fn config_path() -> PathBuf {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        home.join(".config").join("Translator").join("ui_config.json")
+        home.join(".config")
+            .join("Translator")
+            .join("ui_config.json")
     }
 }
 
@@ -212,8 +254,12 @@ fn save_config_value(patch: &str) -> Result<String, String> {
 
     let path = config_path();
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("Failed to create config directory {}: {error}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Failed to create config directory {}: {error}",
+                parent.display()
+            )
+        })?;
     }
     let raw = serde_json::to_string_pretty(&config)
         .map_err(|error| format!("Failed to encode config: {error}"))?;
@@ -282,20 +328,29 @@ fn is_executable_file(path: &Path) -> bool {
 
 pub(crate) fn bridge_process(app: &AppHandle, command: &str) -> Result<Command, String> {
     #[cfg(target_os = "windows")]
-    if let Some(executable) = bridge_resource_executable(app) {
-        let mut process = Command::new(executable);
-        hide_child_console(&mut process);
-        process.arg(command);
-        return Ok(process);
+    {
+        if let Some(executable) = bridge_resource_executable(app) {
+            let mut process = Command::new(executable);
+            hide_child_console(&mut process);
+            process.arg(command);
+            return Ok(process);
+        }
+
+        #[cfg(not(debug_assertions))]
+        {
+            return Err(format!(
+                "Packaged Python bridge resource not found. Expected {BRIDGE_RESOURCE_DIR}/{BRIDGE_RESOURCE_EXE} in the app resources directory."
+            ));
+        }
     }
+
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
 
     let root = workspace_root()?;
     let script = bridge_script()?;
     let mut process = Command::new(python_executable()?);
-    process
-        .current_dir(root)
-        .arg(script)
-        .arg(command);
+    process.current_dir(root).arg(script).arg(command);
     hide_child_console(&mut process);
     Ok(process)
 }
@@ -307,9 +362,23 @@ fn run_bridge(app: &AppHandle, command: &str, input: Option<&str>) -> Result<Str
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = process
-        .spawn()
-        .map_err(|error| format!("Failed to spawn Python bridge: {error}"))?;
+    startup_log("bridge_spawn_start", Some(&format!("command={command}")));
+    let mut child = match process.spawn() {
+        Ok(child) => {
+            startup_log(
+                "bridge_spawn_end",
+                Some(&format!("command={command} status=ok")),
+            );
+            child
+        }
+        Err(error) => {
+            startup_log(
+                "bridge_spawn_end",
+                Some(&format!("command={command} status=error error={error}")),
+            );
+            return Err(format!("Failed to spawn Python bridge: {error}"));
+        }
+    };
 
     if let Some(payload) = input {
         if let Some(mut stdin) = child.stdin.take() {
@@ -567,9 +636,7 @@ pub(crate) fn emit_clipboard_translation_request(app: &AppHandle) -> Result<(), 
             }
             Err(error) => {
                 let message = format!("{error}");
-                eprintln!(
-                    "main: clipboard trigger eval failed (attempt={attempt}): {message}"
-                );
+                eprintln!("main: clipboard trigger eval failed (attempt={attempt}): {message}");
                 last_error = Some(message);
             }
         }
@@ -606,15 +673,17 @@ fn flush_pending_clipboard_triggers(app: &AppHandle) {
 #[tauri::command]
 fn frontend_ready(app: AppHandle, state: State<AppState>) -> Result<(), String> {
     eprintln!("main: frontend reported ready");
+    startup_log("frontend_ready", None);
     state.frontend_ready.store(true, Ordering::Release);
     flush_pending_clipboard_triggers(&app);
+    #[cfg(target_os = "windows")]
+    start_hotkey_listener_async(app);
     Ok(())
 }
 
 fn build_tray(app: &AppHandle) -> Result<(), String> {
-    let open_item =
-        MenuItem::with_id(app, TRAY_OPEN_ID, "Open Translator", true, None::<&str>)
-            .map_err(|error| format!("Failed to create tray menu item: {error}"))?;
+    let open_item = MenuItem::with_id(app, TRAY_OPEN_ID, "Open Translator", true, None::<&str>)
+        .map_err(|error| format!("Failed to create tray menu item: {error}"))?;
     let translate_clipboard_item = MenuItem::with_id(
         app,
         TRAY_TRANSLATE_CLIPBOARD_ID,
@@ -630,7 +699,12 @@ fn build_tray(app: &AppHandle) -> Result<(), String> {
 
     let menu = Menu::with_items(
         app,
-        &[&open_item, &translate_clipboard_item, &separator, &quit_item],
+        &[
+            &open_item,
+            &translate_clipboard_item,
+            &separator,
+            &quit_item,
+        ],
     )
     .map_err(|error| format!("Failed to create tray menu: {error}"))?;
 
@@ -671,7 +745,9 @@ fn cancel_running_translation(
     };
 
     if let Some(running) = running {
-        state.canceled_job_id.store(running.job_id, Ordering::Relaxed);
+        state
+            .canceled_job_id
+            .store(running.job_id, Ordering::Relaxed);
         let mut child = running.child.lock().unwrap();
         let _ = child.kill();
         let _ = child.wait();
@@ -710,19 +786,46 @@ fn stop_hotkey_listener(state: &AppState) {
     }
 }
 
+fn set_hotkey_status(state: &AppState, status: &str, error: Option<String>) {
+    let mut guard = state.hotkey_status.lock().unwrap();
+    *guard = HotkeyStatus {
+        state: status.to_string(),
+        error,
+    };
+}
+
+#[cfg(target_os = "windows")]
+fn start_hotkey_listener_async(app: AppHandle) {
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        if let Err(error) = spawn_hotkey_listener(&app, &state) {
+            eprintln!("main: Windows hotkey listener failed: {error}");
+        }
+    });
+}
+
 fn spawn_hotkey_listener(app: &AppHandle, state: &AppState) -> Result<(), String> {
     stop_hotkey_listener(state);
 
     if !hotkey_enabled(app) {
+        set_hotkey_status(state, "disabled", None);
         return Ok(());
     }
 
     #[cfg(target_os = "macos")]
     {
         eprintln!("main: starting native macOS hotkey listener");
-        let listener = hotkey_macos::MacHotkeyListener::start(app.clone(), EVENT_HOTKEY_ERROR)?;
+        let listener = match hotkey_macos::MacHotkeyListener::start(app.clone(), EVENT_HOTKEY_ERROR)
+        {
+            Ok(listener) => listener,
+            Err(error) => {
+                set_hotkey_status(state, "error", Some(error.clone()));
+                return Err(error);
+            }
+        };
         let mut guard = state.hotkey_listener.lock().unwrap();
         *guard = Some(listener);
+        set_hotkey_status(state, "running", None);
         eprintln!("main: native macOS hotkey listener ready");
         return Ok(());
     }
@@ -730,9 +833,16 @@ fn spawn_hotkey_listener(app: &AppHandle, state: &AppState) -> Result<(), String
     #[cfg(target_os = "windows")]
     {
         eprintln!("main: starting Windows hotkey listener");
-        let listener = hotkey_windows::WindowsHotkeyListener::start(app.clone())?;
+        let listener = match hotkey_windows::WindowsHotkeyListener::start(app.clone()) {
+            Ok(listener) => listener,
+            Err(error) => {
+                set_hotkey_status(state, "error", Some(error.clone()));
+                return Err(error);
+            }
+        };
         let mut guard = state.hotkey_listener.lock().unwrap();
         *guard = Some(listener);
+        set_hotkey_status(state, "running", None);
         eprintln!("main: Windows hotkey listener ready");
         return Ok(());
     }
@@ -740,11 +850,16 @@ fn spawn_hotkey_listener(app: &AppHandle, state: &AppState) -> Result<(), String
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = app;
+        set_hotkey_status(state, "disabled", None);
         Ok(())
     }
 }
 
-fn spawn_translation_stream(app: &AppHandle, payload: &str, state: &AppState) -> Result<u64, String> {
+fn spawn_translation_stream(
+    app: &AppHandle,
+    payload: &str,
+    state: &AppState,
+) -> Result<u64, String> {
     let _ = cancel_running_translation(app, state, None, false)?;
 
     let job_id = state.next_job_id.fetch_add(1, Ordering::Relaxed) + 1;
@@ -755,9 +870,30 @@ fn spawn_translation_stream(app: &AppHandle, payload: &str, state: &AppState) ->
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
 
-    let mut child = process
-        .spawn()
-        .map_err(|error| format!("Failed to spawn streaming translation bridge: {error}"))?;
+    startup_log(
+        "bridge_spawn_start",
+        Some("command=translate-stream streaming=true"),
+    );
+    let mut child = match process.spawn() {
+        Ok(child) => {
+            startup_log(
+                "bridge_spawn_end",
+                Some("command=translate-stream streaming=true status=ok"),
+            );
+            child
+        }
+        Err(error) => {
+            startup_log(
+                "bridge_spawn_end",
+                Some(&format!(
+                    "command=translate-stream streaming=true status=error error={error}"
+                )),
+            );
+            return Err(format!(
+                "Failed to spawn streaming translation bridge: {error}"
+            ));
+        }
+    };
 
     if let Some(mut stdin) = child.stdin.take() {
         stdin
@@ -897,13 +1033,37 @@ fn get_config() -> Result<String, String> {
 #[tauri::command]
 fn save_config(app: AppHandle, payload: String, state: State<AppState>) -> Result<String, String> {
     let result = save_config_value(&payload)?;
+    #[cfg(target_os = "windows")]
+    {
+        if state.frontend_ready.load(Ordering::Acquire) {
+            start_hotkey_listener_async(app);
+        } else {
+            set_hotkey_status(&state, "unknown", None);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
     spawn_hotkey_listener(&app, &state)?;
     Ok(result)
 }
 
 #[tauri::command]
 fn sync_hotkey_listener(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        if state.frontend_ready.load(Ordering::Acquire) {
+            start_hotkey_listener_async(app);
+        } else {
+            set_hotkey_status(&state, "unknown", None);
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
     spawn_hotkey_listener(&app, &state)
+}
+
+#[tauri::command]
+fn hotkey_status(state: State<AppState>) -> HotkeyStatus {
+    state.hotkey_status.lock().unwrap().clone()
 }
 
 #[tauri::command]
@@ -943,7 +1103,11 @@ fn take_translation_events(job_id: u64, state: State<AppState>) -> Result<Vec<Va
 }
 
 #[tauri::command]
-fn cancel_translation(app: AppHandle, job_id: Option<u64>, state: State<AppState>) -> Result<bool, String> {
+fn cancel_translation(
+    app: AppHandle,
+    job_id: Option<u64>,
+    state: State<AppState>,
+) -> Result<bool, String> {
     Ok(cancel_running_translation(&app, &state, job_id, true)?.is_some())
 }
 
@@ -985,8 +1149,7 @@ fn ax_is_process_trusted(with_prompt: bool) -> bool {
 
     let key = CFString::new("AXTrustedCheckOptionPrompt");
     let value = CFBoolean::true_value();
-    let dict: CFDictionary<CFString, CFBoolean> =
-        CFDictionary::from_CFType_pairs(&[(key, value)]);
+    let dict: CFDictionary<CFString, CFBoolean> = CFDictionary::from_CFType_pairs(&[(key, value)]);
     unsafe { AXIsProcessTrustedWithOptions(dict.as_CFTypeRef()) }
 }
 
@@ -1055,6 +1218,8 @@ fn open_privacy_settings(page: String) {
 }
 
 fn main() {
+    startup_log("app_main_start", None);
+
     let app = tauri::Builder::default()
         .manage(AppState {
             quitting: AtomicBool::new(false),
@@ -1063,13 +1228,23 @@ fn main() {
             translation: Mutex::new(None),
             translation_events: Mutex::new(HashMap::new()),
             hotkey_listener: Mutex::new(None),
+            hotkey_status: Mutex::new(HotkeyStatus {
+                state: "unknown".to_string(),
+                error: None,
+            }),
             frontend_ready: AtomicBool::new(false),
             pending_clipboard_triggers: AtomicU64::new(0),
         })
         .setup(|app| {
+            startup_log("setup_start", None);
             build_tray(&app.handle())?;
-            #[cfg(not(target_os = "macos"))]
-            let _ = spawn_hotkey_listener(&app.handle(), &app.state::<AppState>());
+            match main_window(&app.handle()) {
+                Ok(_) => startup_log("window_ready", Some("label=main")),
+                Err(error) => {
+                    startup_log("window_ready", Some(&format!("label=main error={error}")))
+                }
+            }
+            startup_log("setup_end", None);
             Ok(())
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -1134,6 +1309,7 @@ fn main() {
             get_config,
             save_config,
             sync_hotkey_listener,
+            hotkey_status,
             translate,
             start_translation_stream,
             take_translation_events,
