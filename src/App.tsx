@@ -181,7 +181,35 @@ const isHistoryItem = (value: unknown): value is HistoryItem => {
 
 const backupBadStorageValue = (key: string, value: string) => {
   try {
-    localStorage.setItem(`${key}_corrupt_${Date.now()}`, value);
+    writeStorageItem(`${key}_corrupt_${Date.now()}`, value);
+    removeStorageItem(key);
+  } catch (error) {
+    console.error(error);
+  }
+};
+
+const readStorageItem = (key: string): string | null => {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    return localStorage.getItem(key);
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
+};
+
+const writeStorageItem = (key: string, value: string) => {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(key, value);
+  } catch (error) {
+    console.error(error);
+  }
+};
+
+const removeStorageItem = (key: string) => {
+  try {
+    if (typeof localStorage === "undefined") return;
     localStorage.removeItem(key);
   } catch (error) {
     console.error(error);
@@ -189,7 +217,7 @@ const backupBadStorageValue = (key: string, value: string) => {
 };
 
 const loadHistoryFromStorage = (): HistoryItem[] => {
-  const saved = localStorage.getItem(HISTORY_STORAGE_KEY);
+  const saved = readStorageItem(HISTORY_STORAGE_KEY);
   if (!saved) return [];
 
   try {
@@ -237,6 +265,7 @@ export default function App() {
   
   const currentJobIdRef = useRef<number | null>(null);
   const inFlightRef = useRef(false);
+  const activeRunRef = useRef(0);
   const statusRef = useRef(status);
   const copyStatusTimeoutRef = useRef<number | null>(null);
   const historyListRef = useRef<HTMLDivElement>(null);
@@ -452,7 +481,7 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => { localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history)); }, [history]);
+  useEffect(() => { writeStorageItem(HISTORY_STORAGE_KEY, JSON.stringify(history)); }, [history]);
 
   const releaseScrollSyncLock = () => {
     if (scrollSyncReleaseRef.current !== null) {
@@ -509,6 +538,8 @@ export default function App() {
 
   const runTranslation = async (text: string) => {
     if (!text.trim() || inFlightRef.current) return;
+    const runId = activeRunRef.current + 1;
+    activeRunRef.current = runId;
     inFlightRef.current = true;
     setInput(text); setOutput(""); setSegments([]); setIsSubmitting(true); setProgressRatio(0);
     const request: TranslationRequest = {
@@ -527,7 +558,7 @@ export default function App() {
       try {
         const jobId = await startTranslationStream(request);
         currentJobIdRef.current = jobId;
-        void pollProgress(jobId, text);
+        void pollProgress(jobId, text, runId);
         return;
       } catch (err) { console.error(err); }
     }
@@ -537,7 +568,13 @@ export default function App() {
       if (resp.segments) setSegments(resp.segments);
       addToHistory(text, resp.output_text); 
       setStatus(t("done"));
-    } catch (err: any) { setStatus(`Error: ${err.message}`); } finally { inFlightRef.current = false; setIsSubmitting(false); setProgressRatio(100); }
+    } catch (err: any) { setStatus(`Error: ${err.message}`); } finally {
+      if (activeRunRef.current === runId) {
+        inFlightRef.current = false;
+        setIsSubmitting(false);
+        setProgressRatio(100);
+      }
+    }
   };
 
   runTranslationRef.current = runTranslation;
@@ -559,7 +596,7 @@ export default function App() {
       await runTranslationRef.current(clipboardText);
     }
   };
-  const pollProgress = async (jobId: number, sourceText: string) => {
+  const pollProgress = async (jobId: number, sourceText: string, runId: number) => {
     let finalOutput = "";
     let doneSegs: { source: string; target: string }[] = [];
     try {
@@ -590,10 +627,10 @@ export default function App() {
         setStatus(`Error: ${err?.message || "Polling failed"}`);
       }
     } finally {
-      if (currentJobIdRef.current === jobId) {
+      if (activeRunRef.current === runId && currentJobIdRef.current === jobId) {
         currentJobIdRef.current = null;
       }
-      if (currentJobIdRef.current === null) {
+      if (activeRunRef.current === runId && currentJobIdRef.current === null) {
         inFlightRef.current = false;
         setIsSubmitting(false);
       }
@@ -602,6 +639,7 @@ export default function App() {
 
   const stopTranslation = () => {
     const jobId = currentJobIdRef.current;
+    activeRunRef.current += 1;
     currentJobIdRef.current = null;
     inFlightRef.current = false;
     setIsSubmitting(false);

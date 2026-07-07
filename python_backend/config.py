@@ -18,6 +18,19 @@ def get_config_path() -> Path:
     return Path(base) / "Translator" / "ui_config.json"
 
 
+def corrupt_backup_path(path: Path) -> Path:
+    base = path.with_suffix(path.suffix + ".corrupt")
+    if not base.exists():
+        return base
+
+    index = 1
+    while True:
+        candidate = path.with_suffix(path.suffix + f".corrupt.{index}")
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
 class ConfigStore:
     def __init__(self, path: Path | None = None):
         self.path = path or get_config_path()
@@ -31,7 +44,7 @@ class ConfigStore:
             if not isinstance(data, dict):
                 raise TypeError("Config file must contain a JSON object.")
         except Exception:
-            corrupt_path = self.path.with_suffix(self.path.suffix + ".corrupt")
+            corrupt_path = corrupt_backup_path(self.path)
             try:
                 if "raw_bytes" in locals():
                     corrupt_path.write_bytes(raw_bytes)
