@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
+  type DesktopBackendStatus,
+  type HotkeyStatus,
+  getHotkeyStatus,
   isTauriRuntime,
+  loadInitialConfig,
   notifyFrontendReady,
   readClipboardText,
+  refreshBackendStatus,
   requestAccessibility,
   requestInputMonitoring,
   runClipboardOcr,
@@ -12,7 +17,6 @@ import {
   syncHotkeyListener,
   takeTranslationEvents,
   translate,
-  waitForBackend,
   cancelTranslation,
   checkAccessibility,
   checkInputMonitoring,
@@ -170,7 +174,9 @@ export default function App() {
   const [config, setConfig] = useState<ExtendedConfig>(defaultConfig);
   const [input, setInput] = useState("");
   const [output, setOutput] = useState("");
-  const [status, setStatus] = useState("Initializing...");
+  const [status, setStatus] = useState(I18N[defaultConfig.ui_lang]["ready"]);
+  const [backendStatus, setBackendStatus] = useState<DesktopBackendStatus | null>(null);
+  const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatus | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [progressRatio, setProgressRatio] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
@@ -204,6 +210,19 @@ export default function App() {
   const hotkeyDescription = config.ui_lang === "zh"
     ? `${DOUBLE_COPY_SHORTCUT} 触发剪贴板翻译。`
     : `${DOUBLE_COPY_SHORTCUT} triggers clipboard translation.`;
+  const backendStatusText = backendStatus
+    ? backendStatus.state === "running"
+      ? "Backend: running"
+      : `Backend: ${backendStatus.error || backendStatus.state}`
+    : null;
+  const hotkeyStatusText = hotkeyStatus
+    ? hotkeyStatus.error
+      ? `Hotkey: ${hotkeyStatus.state} (${hotkeyStatus.error})`
+      : `Hotkey: ${hotkeyStatus.state}`
+    : null;
+  const footerDetails = [config.model, config.mode === "local" ? t("internal") : t("external"), backendStatusText, hotkeyStatusText]
+    .filter(Boolean)
+    .join(" • ");
 
   const stopPermissionPolling = () => {
     if (permissionPollRef.current !== null) {
@@ -297,13 +316,32 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    void waitForBackend().then(({ config: savedConfig }) => {
+    let canceled = false;
+
+    if (isTauriRuntime()) {
+      void notifyFrontendReady().catch((error) => {
+        console.error(error);
+        if (!canceled) {
+          setStatus(`Frontend ready: ${error instanceof Error ? error.message : "failed"}`);
+        }
+      });
+    }
+
+    const refreshRuntimeStatus = async () => {
+      const [backend, hotkey] = await Promise.all([refreshBackendStatus(), getHotkeyStatus()]);
+      if (canceled) return;
+      setBackendStatus(backend);
+      setHotkeyStatus(hotkey);
+    };
+
+    void loadInitialConfig().then(({ config: savedConfig, desktopStatus }) => {
+      if (canceled) return;
       const merged = { ...defaultConfig, ...savedConfig };
       setConfig(merged);
       setStatus(I18N[merged.ui_lang || "en"]["ready"]);
+      setBackendStatus(desktopStatus);
       document.body.setAttribute("data-theme", merged.theme || "system");
       if (isTauriRuntime()) {
-        void notifyFrontendReady();
         if (IS_MAC_BUILD) {
           void initializeMacPermissions();
         } else {
@@ -311,8 +349,25 @@ export default function App() {
           setInputMonitoringGranted(true);
         }
       }
-    }).catch((err) => setStatus(`Error: ${err.message}`));
+    }).catch((err) => {
+      if (canceled) return;
+      setStatus(`Config: ${err instanceof Error ? err.message : "default settings loaded"}`);
+      document.body.setAttribute("data-theme", defaultConfig.theme);
+    }).finally(() => {
+      void refreshRuntimeStatus().catch((error) => {
+        console.error(error);
+        if (!canceled) {
+          setBackendStatus({
+            state: "stopped",
+            python: null,
+            error: error instanceof Error ? error.message : "Backend status refresh failed."
+          });
+        }
+      });
+    });
+
     return () => {
+      canceled = true;
       stopPermissionPolling();
     };
   }, []);
@@ -585,7 +640,7 @@ export default function App() {
 
       <footer className="status-bar">
         <span>{status}</span>
-        <span>{config.model} • {config.mode === "local" ? t("internal") : t("external")}</span>
+        <span>{footerDetails}</span>
       </footer>
 
       {showSettings && (

@@ -8,6 +8,11 @@ export type DesktopBackendStatus = {
   error: string | null;
 };
 
+export type HotkeyStatus = {
+  state: string;
+  error: string | null;
+};
+
 type OcrResponse = {
   text: string;
 };
@@ -147,6 +152,43 @@ export async function getDesktopBackendStatus(): Promise<DesktopBackendStatus | 
   return invoke<DesktopBackendStatus>("backend_status");
 }
 
+export async function refreshBackendStatus(): Promise<DesktopBackendStatus | null> {
+  if (isTauriRuntime()) {
+    return getDesktopBackendStatus();
+  }
+
+  try {
+    await getHealth();
+    return {
+      state: "running",
+      python: null,
+      error: null
+    };
+  } catch (error) {
+    return {
+      state: "stopped",
+      python: null,
+      error: error instanceof Error ? error.message : "Backend health check failed."
+    };
+  }
+}
+
+export async function getHotkeyStatus(): Promise<HotkeyStatus | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  try {
+    return await invoke<HotkeyStatus>("hotkey_status");
+  } catch (error) {
+    return {
+      state: "unknown",
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
 export async function showMainWindow(): Promise<void> {
   if (!isTauriRuntime()) {
     return;
@@ -260,4 +302,15 @@ export async function waitForBackend(timeoutMs = 12000) {
     throw new Error(desktopStatus.error);
   }
   throw new Error(lastError);
+}
+
+export async function loadInitialConfig(): Promise<{
+  config: AppConfig;
+  desktopStatus: DesktopBackendStatus | null;
+}> {
+  const config = await getConfig();
+  return {
+    config,
+    desktopStatus: null
+  };
 }
