@@ -3,12 +3,13 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, List
+from typing import Callable, Iterator, List
 
 from .splitter import (
     SplitOptions,
     ContextOptions,
     Segment,
+    split_markdown_blocks,
     split_plain,
     split_with_limited_context,
 )
@@ -19,6 +20,7 @@ from .postprocess import PostProcessOptions, extract_translation
 class SplitMode(str, Enum):
     PLAIN = "plain"
     CONTEXT = "context"  # prev1, optionally prev2
+    MARKDOWN = "markdown"
 
 class OutputMode(str, Enum):
     TRANSLATIONS_ONLY = "translations_only"
@@ -45,6 +47,19 @@ class SegmentReport:
     prompt_contains_context: bool
     used_contextual_template: bool  # 参考上面的信息... 这句是否出现
 
+
+@dataclass
+class PipelineStreamUpdate:
+    pairs: List[AlignedPair]
+    total_segments: int
+    completed_segments: int
+    partial: bool
+    active_segment_index: int | None
+    active_segment_source: str | None
+    active_segment_target: str
+    segment_status: str
+    error: Exception | None = None
+
 @dataclass
 class PipelineOptions:
     split_mode: SplitMode = SplitMode.PLAIN
@@ -64,6 +79,8 @@ GenerateFn = Callable[[str], str]
 
 
 def make_segments(text: str, opt: PipelineOptions) -> List[Segment]:
+    if opt.split_mode == SplitMode.MARKDOWN:
+        return split_markdown_blocks(text)
     if opt.split_mode == SplitMode.CONTEXT:
         return split_with_limited_context(text, split_opt=opt.split_opt, ctx_opt=opt.ctx_opt)
     return split_plain(text, opt=opt.split_opt)
@@ -191,6 +208,98 @@ def iter_pipeline(
             prompt=prompt if opt.keep_debug else "",
             raw=raw if opt.keep_debug else "",
         )
+
+
+def iter_streaming_pipeline(
+    text: str,
+    stream_generate: Callable[[str], Iterator[str]],
+    opt: PipelineOptions | None = None,
+    *,
+    segments: List[Segment] | None = None,
+) -> Iterator[PipelineStreamUpdate]:
+    if opt is None:
+        opt = PipelineOptions()
+
+    segments = segments if segments is not None else make_segments(text, opt)
+    total_segments = len(segments)
+    pairs: List[AlignedPair] = []
+
+    for index, seg in enumerate(segments):
+        if seg.protected or (not seg.text.strip() and not opt.skip_empty_segments):
+            pairs.append(AlignedPair(source=seg.text, target=seg.text))
+            yield PipelineStreamUpdate(
+                pairs=list(pairs),
+                total_segments=total_segments,
+                completed_segments=index + 1,
+                partial=False,
+                active_segment_index=index + 1,
+                active_segment_source=seg.text,
+                active_segment_target=seg.text,
+                segment_status="passthrough",
+            )
+            continue
+
+        if opt.skip_empty_segments and not seg.text.strip():
+            continue
+
+        p_opt = PromptOptions(
+            source_lang=opt.prompt_opt.source_lang,
+            target_lang=opt.prompt_opt.target_lang,
+            preset=opt.prompt_opt.preset,
+            terminology=opt.prompt_opt.terminology,
+            context=seg.context,
+            src_text_with_format=opt.prompt_opt.src_text_with_format,
+        )
+        prompt = build_prompt(seg.text, p_opt)
+
+        raw = ""
+        try:
+            for chunk in stream_generate(prompt):
+                raw += chunk
+                yield PipelineStreamUpdate(
+                    pairs=pairs + [AlignedPair(source=seg.text, target=raw)],
+                    total_segments=total_segments,
+                    completed_segments=index,
+                    partial=True,
+                    active_segment_index=index + 1,
+                    active_segment_source=seg.text,
+                    active_segment_target=raw,
+                    segment_status="streaming",
+                )
+
+            target = extract_translation(raw, opt.post_opt)
+            pairs.append(
+                AlignedPair(
+                    source=seg.text,
+                    target=target,
+                    context=seg.context if opt.keep_debug else "",
+                    prompt=prompt if opt.keep_debug else "",
+                    raw=raw if opt.keep_debug else "",
+                )
+            )
+            yield PipelineStreamUpdate(
+                pairs=list(pairs),
+                total_segments=total_segments,
+                completed_segments=index + 1,
+                partial=False,
+                active_segment_index=index + 1,
+                active_segment_source=seg.text,
+                active_segment_target=target,
+                segment_status="completed",
+            )
+        except Exception as exc:
+            yield PipelineStreamUpdate(
+                pairs=pairs + [AlignedPair(source=seg.text, target=raw)],
+                total_segments=total_segments,
+                completed_segments=index,
+                partial=False,
+                active_segment_index=index + 1,
+                active_segment_source=seg.text,
+                active_segment_target=raw,
+                segment_status="error",
+                error=exc,
+            )
+            raise
 
 
 def join_translations(pairs: List[AlignedPair], join_with: str = "\n") -> str:

@@ -54,7 +54,7 @@ class TranslationServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             service.translate(TranslationRequest(text="   "))
 
-    @patch("python_backend.services.translation_service.build_prompt")
+    @patch("core.pipeline.build_prompt")
     @patch("python_backend.services.translation_service.OllamaBackend")
     def test_markdown_mode_splits_prose_blocks_and_passthrough_protected_blocks(self, backend_cls, build_prompt_mock):
         backend = backend_cls.return_value

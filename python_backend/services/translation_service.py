@@ -5,21 +5,18 @@ from typing import Any, Iterator
 
 from backend import BackendError, OllamaBackend, OllamaBackendOptions, OllamaMode
 from core import (
-    AlignedPair,
     OutputMode,
     PipelineOptions,
     PromptOptions,
     PromptPreset,
     SplitMode,
     SplitOptions,
+    iter_streaming_pipeline,
+    make_segments,
     render_output,
 )
-from core.postprocess import extract_translation
 from core.postprocess import PostProcessOptions
-from core.prompt import build_prompt
 from core.splitter import Segment
-from core.splitter import split_markdown_blocks
-from core.splitter import split_plain, split_with_limited_context
 
 from ..models import SegmentResult, TranslationRequest, TranslationResponse
 
@@ -46,7 +43,11 @@ class TranslationService:
             raise ValueError("Nothing to translate.")
 
         is_markdown_mode = request.translation_mode == "markdown"
-        split_mode = SplitMode.CONTEXT if request.use_context and not is_markdown_mode else SplitMode.PLAIN
+        split_mode = (
+            SplitMode.MARKDOWN
+            if is_markdown_mode
+            else SplitMode.CONTEXT if request.use_context else SplitMode.PLAIN
+        )
         prompt_opt = PromptOptions(
             source_lang=request.source_lang,
             target_lang=request.target_lang,
@@ -57,18 +58,17 @@ class TranslationService:
             split_mode=split_mode,
             prompt_opt=prompt_opt,
             split_opt=split_opt,
+            post_opt=(
+                PostProcessOptions(remove_leading_labels=False, strip_quotes=False)
+                if is_markdown_mode
+                else PostProcessOptions()
+            ),
             skip_empty_segments=False,
         )
 
         output_mode = OutputMode(request.output_mode)
         join_with = "\n\n" if is_markdown_mode else "\n"
-
-        if is_markdown_mode:
-            segments = split_markdown_blocks(text)
-        elif split_mode == SplitMode.CONTEXT:
-            segments = split_with_limited_context(text, split_opt=opt.split_opt, ctx_opt=opt.ctx_opt)
-        else:
-            segments = split_plain(text, opt=opt.split_opt)
+        segments = make_segments(text, opt)
 
         self._validate_request_budget(request, text, segments)
 
@@ -96,97 +96,76 @@ class TranslationService:
             "segment_status": "queued",
         }
 
-        for index, seg in enumerate(segments):
-            if seg.protected or not seg.text.strip():
-                pairs.append(AlignedPair(source=seg.text, target=seg.text))
+        try:
+            for update in iter_streaming_pipeline(
+                text,
+                backend.stream_generate,
+                opt=opt,
+                segments=segments,
+            ):
+                pairs = update.pairs
+                if update.error is not None:
+                    exc = update.error
+                    if isinstance(exc, BackendError):
+                        code = exc.code
+                    else:
+                        code = "backend_error"
+                    yield {
+                        "event": "error",
+                        "code": code,
+                        "message": str(exc),
+                        "output_text": self._render_output(
+                            update.pairs,
+                            output_mode,
+                            request.collapse_newlines,
+                            join_with,
+                        ),
+                        "completed_segments": update.completed_segments,
+                        "total_segments": update.total_segments,
+                        "detected_source_lang": detected_source_lang,
+                        "segment_index": update.active_segment_index,
+                        "active_segment_index": update.active_segment_index,
+                        "active_segment_source": update.active_segment_source,
+                        "active_segment_target": update.active_segment_target,
+                        "segment_status": "error",
+                        "segments": [{"source": pair.source, "target": pair.target} for pair in update.pairs],
+                    }
+                    continue
+
                 yield self._update_event(
-                    pairs=pairs,
+                    pairs=update.pairs,
                     output_mode=output_mode,
                     join_with=join_with,
                     collapse_newlines=request.collapse_newlines,
                     detected_source_lang=detected_source_lang,
-                    completed_segments=index + 1,
-                    total_segments=total_segments,
-                    partial=False,
-                    active_segment_index=index + 1,
-                    active_segment_source=seg.text,
-                    active_segment_target=seg.text,
-                    segment_status="passthrough",
+                    completed_segments=update.completed_segments,
+                    total_segments=update.total_segments,
+                    partial=update.partial,
+                    active_segment_index=update.active_segment_index,
+                    active_segment_source=update.active_segment_source,
+                    active_segment_target=update.active_segment_target,
+                    segment_status=update.segment_status,
                 )
-                continue
-
-            seg_opt = PromptOptions(
-                source_lang=opt.prompt_opt.source_lang,
-                target_lang=opt.prompt_opt.target_lang,
-                preset=opt.prompt_opt.preset,
-                terminology=opt.prompt_opt.terminology,
-                context=seg.context,
-                src_text_with_format=opt.prompt_opt.src_text_with_format,
-            )
-            prompt = build_prompt(seg.text, seg_opt)
-
-            raw = ""
-            try:
-                for chunk in backend.stream_generate(prompt):
-                    raw += chunk
-                    yield self._update_event(
-                        pairs=pairs + [AlignedPair(source=seg.text, target=raw)],
-                        output_mode=output_mode,
-                        join_with=join_with,
-                        collapse_newlines=request.collapse_newlines,
-                        detected_source_lang=detected_source_lang,
-                        completed_segments=index,
-                        total_segments=total_segments,
-                        partial=True,
-                        active_segment_index=index + 1,
-                        active_segment_source=seg.text,
-                        active_segment_target=raw,
-                        segment_status="streaming",
-                    )
-
-                post_opt = (
-                    PostProcessOptions(remove_leading_labels=False, strip_quotes=False)
-                    if is_markdown_mode
-                    else opt.post_opt
-                )
-                target = extract_translation(raw, post_opt)
-                pairs.append(AlignedPair(source=seg.text, target=target))
-                yield self._update_event(
-                    pairs=pairs,
-                    output_mode=output_mode,
-                    join_with=join_with,
-                    collapse_newlines=request.collapse_newlines,
-                    detected_source_lang=detected_source_lang,
-                    completed_segments=index + 1,
-                    total_segments=total_segments,
-                    partial=False,
-                    active_segment_index=index + 1,
-                    active_segment_source=seg.text,
-                    active_segment_target=target,
-                    segment_status="completed",
-                )
-            except BackendError as exc:
+        except BackendError:
+            raise
+        except Exception as exc:
+            if not isinstance(exc, BackendError):
                 yield {
                     "event": "error",
-                    "code": exc.code,
+                    "code": "backend_error",
                     "message": str(exc),
-                    "output_text": self._render_output(
-                        pairs + [AlignedPair(source=seg.text, target=raw)],
-                        output_mode,
-                        request.collapse_newlines,
-                        join_with,
-                    ),
-                    "completed_segments": index,
+                    "output_text": self._render_output(pairs, output_mode, request.collapse_newlines, join_with),
+                    "completed_segments": len(pairs),
                     "total_segments": total_segments,
                     "detected_source_lang": detected_source_lang,
-                    "segment_index": index + 1,
-                    "active_segment_index": index + 1,
-                    "active_segment_source": seg.text,
-                    "active_segment_target": raw,
+                    "segment_index": None,
+                    "active_segment_index": None,
+                    "active_segment_source": None,
+                    "active_segment_target": "",
                     "segment_status": "error",
                     "segments": [{"source": pair.source, "target": pair.target} for pair in pairs],
                 }
-                raise
+            raise
 
         response = TranslationResponse(
             output_text=self._render_output(pairs, output_mode, request.collapse_newlines, join_with),
