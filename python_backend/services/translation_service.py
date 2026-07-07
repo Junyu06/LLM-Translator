@@ -15,8 +15,10 @@ from core import (
     render_output,
 )
 from core.postprocess import extract_translation
+from core.postprocess import PostProcessOptions
 from core.prompt import build_prompt
 from core.splitter import Segment
+from core.splitter import split_markdown_blocks
 from core.splitter import split_plain, split_with_limited_context
 
 from ..models import SegmentResult, TranslationRequest, TranslationResponse
@@ -58,21 +60,24 @@ class TranslationService:
             skip_empty_segments=False,
         )
 
+        output_mode = OutputMode(request.output_mode)
+        join_with = "\n\n" if is_markdown_mode else "\n"
+
+        if is_markdown_mode:
+            segments = split_markdown_blocks(text)
+        elif split_mode == SplitMode.CONTEXT:
+            segments = split_with_limited_context(text, split_opt=opt.split_opt, ctx_opt=opt.ctx_opt)
+        else:
+            segments = split_plain(text, opt=opt.split_opt)
+
+        self._validate_request_budget(request, text, segments)
+
         backend_opt = OllamaBackendOptions(
             mode=OllamaMode(request.mode),
             model=request.model.strip() or OllamaBackendOptions().model,
             host=request.host.strip() or OllamaBackendOptions().host,
         )
         backend = OllamaBackend(backend_opt)
-        output_mode = OutputMode(request.output_mode)
-
-        if is_markdown_mode:
-            segments = [Segment(text=text, context="")]
-        elif split_mode == SplitMode.CONTEXT:
-            segments = split_with_limited_context(text, split_opt=opt.split_opt, ctx_opt=opt.ctx_opt)
-        else:
-            segments = split_plain(text, opt=opt.split_opt)
-
         detected_source_lang = (
             self._detect_source_lang(text) if request.source_lang == "auto" else request.source_lang
         )
@@ -92,11 +97,12 @@ class TranslationService:
         }
 
         for index, seg in enumerate(segments):
-            if not seg.text.strip():
+            if seg.protected or not seg.text.strip():
                 pairs.append(AlignedPair(source=seg.text, target=seg.text))
                 yield self._update_event(
                     pairs=pairs,
                     output_mode=output_mode,
+                    join_with=join_with,
                     collapse_newlines=request.collapse_newlines,
                     detected_source_lang=detected_source_lang,
                     completed_segments=index + 1,
@@ -125,6 +131,7 @@ class TranslationService:
                 yield self._update_event(
                     pairs=pairs + [AlignedPair(source=seg.text, target=raw)],
                     output_mode=output_mode,
+                    join_with=join_with,
                     collapse_newlines=request.collapse_newlines,
                     detected_source_lang=detected_source_lang,
                     completed_segments=index,
@@ -136,11 +143,17 @@ class TranslationService:
                     segment_status="streaming",
                 )
 
-            target = extract_translation(raw, opt.post_opt)
+            post_opt = (
+                PostProcessOptions(remove_leading_labels=False, strip_quotes=False)
+                if is_markdown_mode
+                else opt.post_opt
+            )
+            target = extract_translation(raw, post_opt)
             pairs.append(AlignedPair(source=seg.text, target=target))
             yield self._update_event(
                 pairs=pairs,
                 output_mode=output_mode,
+                join_with=join_with,
                 collapse_newlines=request.collapse_newlines,
                 detected_source_lang=detected_source_lang,
                 completed_segments=index + 1,
@@ -153,7 +166,7 @@ class TranslationService:
             )
 
         response = TranslationResponse(
-            output_text=self._render_output(pairs, output_mode, request.collapse_newlines),
+            output_text=self._render_output(pairs, output_mode, request.collapse_newlines, join_with),
             segments=[SegmentResult(source=pair.source, target=pair.target) for pair in pairs],
             detected_source_lang=detected_source_lang,
         )
@@ -175,6 +188,7 @@ class TranslationService:
         *,
         pairs: list[AlignedPair],
         output_mode: OutputMode,
+        join_with: str,
         collapse_newlines: bool,
         detected_source_lang: str | None,
         completed_segments: int,
@@ -187,7 +201,7 @@ class TranslationService:
     ) -> dict[str, Any]:
         return {
             "event": "update",
-            "output_text": self._render_output(pairs, output_mode, collapse_newlines),
+            "output_text": self._render_output(pairs, output_mode, collapse_newlines, join_with),
             "completed_segments": completed_segments,
             "total_segments": total_segments,
             "detected_source_lang": detected_source_lang,
@@ -199,11 +213,45 @@ class TranslationService:
             "segments": [{"source": pair.source, "target": pair.target} for pair in pairs],
         }
 
-    def _render_output(self, pairs: list[AlignedPair], mode: OutputMode, collapse_newlines: bool) -> str:
-        output_text = render_output(pairs, mode=mode)
+    def _render_output(
+        self,
+        pairs: list[AlignedPair],
+        mode: OutputMode,
+        collapse_newlines: bool,
+        join_with: str = "\n",
+    ) -> str:
+        output_text = render_output(pairs, mode=mode, join_with=join_with)
         if collapse_newlines:
             output_text = re.sub(r"\n{3,}", "\n\n", self._normalize_text(output_text))
         return output_text
+
+    def _validate_request_budget(
+        self,
+        request: TranslationRequest,
+        text: str,
+        segments: list[Segment],
+    ) -> None:
+        max_chars = max(0, int(request.max_chars))
+        max_segments = max(0, int(request.max_segments))
+        max_segment_chars = max(0, int(request.max_segment_chars))
+
+        if max_chars and len(text) > max_chars:
+            raise ValueError(
+                f"Input is too large to translate ({len(text)} characters; limit is {max_chars})."
+            )
+
+        if max_segments and len(segments) > max_segments:
+            raise ValueError(
+                f"Too many translation segments ({len(segments)} segments; limit is {max_segments})."
+            )
+
+        if max_segment_chars:
+            for index, segment in enumerate(segments, start=1):
+                if len(segment.text) > max_segment_chars:
+                    raise ValueError(
+                        f"Translation segment is too large at segment {index} "
+                        f"({len(segment.text)} characters; limit is {max_segment_chars})."
+                    )
 
     def _normalize_text(self, text: str) -> str:
         return (

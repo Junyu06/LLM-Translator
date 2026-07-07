@@ -38,6 +38,9 @@ class TranslationRequest:
     model: str = "demonbyron/HY-MT1.5-1.8B"
     mode: str = "local"
     host: str = "http://127.0.0.1:11434"
+    max_chars: int = 50000
+    max_segments: int = 200
+    max_segment_chars: int = 8000
 
 
 @dataclass
