@@ -40,7 +40,7 @@ class TranslatorAPIHandler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 request = TranslationRequest(**payload)
                 response = self.translation_service.translate(request)
-            except ValueError as exc:
+            except (TypeError, ValueError) as exc:
                 self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
             self._write_json(HTTPStatus.OK, response.to_dict())
@@ -59,7 +59,7 @@ class TranslatorAPIHandler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 merged = {**self.config_store.load().to_dict(), **payload}
                 config = AppConfig(**merged)
-            except ValueError as exc:
+            except (TypeError, ValueError) as exc:
                 self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
             self.config_store.save(config)

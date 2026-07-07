@@ -26,8 +26,26 @@ class ConfigStore:
         if not self.path.exists():
             return AppConfig()
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            raw_bytes = self.path.read_bytes()
+            data = json.loads(raw_bytes.decode("utf-8"))
+            if not isinstance(data, dict):
+                raise TypeError("Config file must contain a JSON object.")
         except Exception:
+            corrupt_path = self.path.with_suffix(self.path.suffix + ".corrupt")
+            try:
+                if "raw_bytes" in locals():
+                    corrupt_path.write_bytes(raw_bytes)
+                    print(f"Translator config corrupt: {self.path} -> {corrupt_path}", file=sys.stderr)
+                else:
+                    print(
+                        f"Translator config corrupt: {self.path} (backup unavailable)",
+                        file=sys.stderr,
+                    )
+            except Exception as backup_exc:
+                print(
+                    f"Translator config corrupt: {self.path} (backup failed: {backup_exc})",
+                    file=sys.stderr,
+                )
             return AppConfig()
         known_values = {key: value for key, value in data.items() if key in APP_CONFIG_FIELDS}
         return AppConfig(**{**AppConfig().to_dict(), **known_values})
@@ -36,4 +54,3 @@ class ConfigStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(config.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         return config
-
