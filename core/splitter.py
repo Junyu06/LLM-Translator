@@ -6,8 +6,8 @@ are joined back first. Blank lines stay as passthrough units so the output
 keeps the original spacing.
 
 Markdown mode: one unit per Markdown block (heading, paragraph, list,
-blockquote, table). Only code and reference link definitions are protected
-from translation.
+blockquote, table). Code, quotes that contain code, and reference link
+definitions are protected from translation.
 """
 
 from __future__ import annotations
@@ -319,6 +319,9 @@ def split_markdown_blocks(text: str) -> List[Segment]:
         elif line.lstrip().startswith(">"):
             block, index = _take_blockquote(lines, index)
             kind = "blockquote"
+            # A quote that contains code is kept whole; splitting it would break the quote.
+            if any(_is_any_fence(item.lstrip().lstrip(">")) for item in block):
+                protected = True
         elif _is_list_marker(line):
             block, index = _take_list(lines, index)
             kind = "list"
@@ -331,4 +334,33 @@ def split_markdown_blocks(text: str) -> List[Segment]:
 
         segments.append(Segment(text="\n".join(block), protected=protected, kind=kind))
 
+    return _expand_reference_shortcuts(segments)
+
+
+_SHORTCUT_REF_RE = re.compile(r"(?<![\]\\])\[([^\[\]]+)\](\[\])?(?![(\[:])")
+
+
+def _expand_reference_shortcuts(segments: List[Segment]) -> List[Segment]:
+    """Write `[the docs]` and `[the docs][]` as `[the docs][the docs]`.
+
+    In the short forms the link text is also the label, so translating the text
+    would break the link. The full form renders the same and lets the label be
+    restored after translation.
+    """
+    labels = {
+        match.group(1).strip().lower()
+        for segment in segments
+        if segment.kind == "link_definitions"
+        for match in re.finditer(r"^ {0,3}\[([^\]]+)\]:", segment.text, re.MULTILINE)
+    }
+    if not labels:
+        return segments
+
+    def expand(match: re.Match) -> str:
+        label = match.group(1)
+        return f"[{label}][{label}]" if label.strip().lower() in labels else match.group(0)
+
+    for segment in segments:
+        if segment.translatable:
+            segment.text = _SHORTCUT_REF_RE.sub(expand, segment.text)
     return segments

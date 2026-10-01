@@ -103,7 +103,8 @@ def split_long_segments(segments: List[Segment], max_tokens: int) -> List[Segmen
             result.append(segment)
             continue
         part = ""
-        for sentence in (s for s in _SENTENCE_END_RE.split(segment.text) if s.strip()):
+        sentences = (s for s in _SENTENCE_END_RE.split(segment.text) if s.strip())
+        for sentence in (piece for s in sentences for piece in _cut_sentence(s, max_tokens)):
             joined = f"{part} {sentence}".strip() if part and not _ends_cjk(part) else part + sentence
             if part and estimate_tokens(joined) > max_tokens:
                 result.append(Segment(text=part.strip()))
@@ -113,6 +114,25 @@ def split_long_segments(segments: List[Segment], max_tokens: int) -> List[Segmen
         if part.strip():
             result.append(Segment(text=part.strip()))
     return result
+
+
+def _cut_sentence(sentence: str, max_tokens: int) -> List[str]:
+    """A sentence over budget is cut at a space or clause mark, or mid-text as a last resort."""
+    pieces: List[str] = []
+    rest = sentence
+    while estimate_tokens(rest) > max_tokens:
+        cut, tokens = 0, 0.0
+        for cut, ch in enumerate(rest):
+            tokens += 1 / 1.2 if unicodedata.east_asian_width(ch) in "WF" else 1 / 3.5
+            if tokens > max_tokens - 1:
+                break
+        mark = max(rest.rfind(c, 0, cut) for c in " ,，、;；:：")
+        if mark > cut // 2:
+            cut = mark + 1
+        pieces.append(rest[:cut])
+        rest = rest[cut:]
+    pieces.append(rest)
+    return pieces
 
 
 def _ends_cjk(text: str) -> bool:

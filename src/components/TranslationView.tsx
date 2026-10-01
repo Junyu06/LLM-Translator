@@ -11,7 +11,14 @@ type Props = {
   emptyHint: string;
 };
 
-const LINK_DEFINITION_RE = /^ {0,3}\[[^\]]+\]:\s*\S.*$/gm;
+const LINK_DEFINITION_LINE = /^ {0,3}\[[^\]]+\]:\s*\S/;
+
+// Only blocks made entirely of definitions count, so a definition shown inside
+// a code example does not turn text elsewhere into a link.
+const isDefinitionBlock = (text: string) => {
+  const lines = text.split("\n").filter((line) => line.trim());
+  return lines.length > 0 && lines.every((line) => LINK_DEFINITION_LINE.test(line));
+};
 
 // Each block is rendered on its own, so reference links (`[text][name]`) get
 // the whole document's definitions appended; definitions render nothing.
@@ -24,7 +31,7 @@ const Prose = ({ text, markdown, links = "" }: { text: string; markdown: boolean
 const Pending = () => <span className="pending" aria-hidden="true" />;
 
 export default function TranslationView({ segments, outputText, bilingual, markdown, running, emptyHint }: Props) {
-  const links = markdown ? segments.flatMap((segment) => segment.source.match(LINK_DEFINITION_RE) ?? []).join("\n") : "";
+  const links = markdown ? segments.filter((segment) => isDefinitionBlock(segment.source)).map((segment) => segment.source).join("\n") : "";
 
   if (segments.length === 0) {
     if (outputText) {

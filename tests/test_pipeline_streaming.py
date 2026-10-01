@@ -63,6 +63,13 @@ class LongParagraphTests(unittest.TestCase):
         self.assertEqual("".join(p.text for p in parts), text)
         self.assertTrue(all(p.text.endswith("。") for p in parts))
 
+    def test_sentence_without_breaks_is_cut_anyway(self):
+        text = "长" * 6400
+        parts = split_long_segments([Segment(text)], max_tokens=300)
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(estimate_tokens(p.text) <= 300 for p in parts))
+        self.assertEqual("".join(p.text for p in parts), text)
+
     def test_short_paragraphs_and_code_are_left_alone(self):
         segments = [Segment("Short."), Segment("x = 1\n" * 2000, protected=True, kind="fenced_code")]
         self.assertEqual(split_long_segments(segments, max_tokens=300), segments)

@@ -48,6 +48,11 @@ class PostProcessTests(unittest.TestCase):
         source = "Read [the docs][site]."
         self.assertEqual(extract_translation("阅读文档。", source, keep_format=True), "阅读文档。")
 
+    def test_correct_labels_are_not_swapped_when_the_model_reorders_links(self):
+        source = "Read [the guide][guide] after [the docs][docs]."
+        raw = "先读[文档][docs]，再读[指南][guide]。"
+        self.assertEqual(extract_translation(raw, source, keep_format=True), raw)
+
 
 if __name__ == "__main__":
     unittest.main()

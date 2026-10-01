@@ -280,8 +280,13 @@ export default function App() {
     const runId = runIdRef.current + 1;
     runIdRef.current = runId;
     stopCurrentJob();
-    setRunning(false);
+    // Running, so Stop and Clear work while the clipboard or OCR is read.
+    setRunning(true);
     showStatus(t("reading_clipboard"), "busy");
+    const giveUp = (text: string, clearAfterMs?: number) => {
+      setRunning(false);
+      showStatus(text, "error", clearAfterMs);
+    };
 
     let text = "";
     let source: "text" | "image" | "empty" = "empty";
@@ -294,13 +299,13 @@ export default function App() {
         source = capture.source;
         text = capture.text;
       } catch (error) {
-        if (runIdRef.current === runId) showStatus(`${t("clipboard_error")}: ${errorText(error)}`, "error");
+        if (runIdRef.current === runId) giveUp(`${t("clipboard_error")}: ${errorText(error)}`);
         return;
       }
     }
     if (runIdRef.current !== runId) return;
     if (!text.trim()) {
-      showStatus(source === "image" ? t("ocr_no_text") : t("clipboard_empty"), "error", 4000);
+      giveUp(source === "image" ? t("ocr_no_text") : t("clipboard_empty"), 4000);
       return;
     }
     await runTranslation(text);
@@ -528,7 +533,7 @@ export default function App() {
               {fullscreenPanel === "input"
                 ? iconButton("exit_fullscreen", () => setFullscreenPanel(null), <IconCollapse />)
                 : iconButton("fullscreen", () => setFullscreenPanel("input"), <IconExpand />)}
-              {iconButton("clear", clearAll, <IconTrash />, { disabled: !input && !output })}
+              {iconButton("clear", clearAll, <IconTrash />, { disabled: !input && !output && !running })}
             </div>
           </div>
           <textarea

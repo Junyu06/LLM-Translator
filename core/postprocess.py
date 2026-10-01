@@ -41,13 +41,21 @@ def _is_wrapped_in_quotes(text: str) -> bool:
 def restore_reference_labels(source: str, translation: str) -> str:
     """Put back reference-link labels the model translated ([文档][网站] -> [文档][site]).
 
-    Labels are matched by order, and only when both texts have the same number.
+    A label that already matches one in the source is left alone, even if the
+    model reordered the links. A changed label gets the source label at the
+    same position, and only when both texts have the same number of labels.
     """
     labels = _REFERENCE_LABEL_RE.findall(source)
     if not labels or len(_REFERENCE_LABEL_RE.findall(translation)) != len(labels):
         return translation
-    remaining = iter(labels)
-    return _REFERENCE_LABEL_RE.sub(lambda _: next(remaining), translation)
+    known = {label.strip().lower() for label in labels}
+    position = iter(range(len(labels)))
+
+    def restore(match: re.Match) -> str:
+        index = next(position)
+        return match.group(1) if match.group(1).strip().lower() in known else labels[index]
+
+    return _REFERENCE_LABEL_RE.sub(restore, translation)
 
 
 def extract_translation(raw: str, source: str = "", *, keep_format: bool = False) -> str:
