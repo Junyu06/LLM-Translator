@@ -106,19 +106,41 @@ export default function TranslationView(props: Props) {
     );
   }
 
-  // Translation only, Markdown: one document, so anything that spans blocks
-  // (list numbering, loose lists) renders as in the source.
+  // Translation only, Markdown: one block per segment, in order. Reference
+  // links were made inline before translating, so every block renders on its
+  // own. Blocks show up to the first one still waiting, so a code block (kept
+  // as-is from the start) does not jump ahead of untranslated text.
   if (markdown) {
-    // Show blocks in order up to the first one still waiting, so a code block
-    // (kept as-is from the start) does not jump ahead of untranslated text.
-    const firstWaiting = segments.findIndex((segment, index) => segment.source.trim() && (!segment.target || retranslating.has(index)));
+    const firstWaiting = segments.findIndex((segment) => segment.source.trim() && !segment.target);
     const shown = firstWaiting === -1 ? segments : segments.slice(0, firstWaiting);
-    const done = shown.map((segment) => segment.target).filter(Boolean).join("\n\n");
-    const waiting = (running || retranslating.size > 0) && firstWaiting !== -1;
     return (
-      <div className="translation reading">
-        {done && <Prose text={done} markdown />}
-        {waiting && <Pending />}
+      <div className="translation reading markdown-blocks">
+        {shown.map((segment, index) => {
+          if (!segment.source.trim()) return null;
+          const busy = retranslating.has(index);
+          if (segment.done && segment.target === segment.source && !busy) {
+            return <div key={index} className="block"><Prose text={segment.source} markdown /></div>;
+          }
+          const showingSource = openSources.has(index);
+          return (
+            <div key={index} className={`para block${showingSource ? " with-source" : ""}`}>
+              {showingSource && <div className="para-source"><Prose text={segment.source} markdown /></div>}
+              {busy ? <Pending /> : <Prose text={segment.target} markdown />}
+              {actionable(segment) && (
+                <Actions
+                  t={t}
+                  index={index}
+                  busy={busy}
+                  showingSource={showingSource}
+                  onToggleSource={() => toggleSource(index)}
+                  onCopy={onCopy}
+                  onRetranslate={onRetranslate}
+                />
+              )}
+            </div>
+          );
+        })}
+        {running && firstWaiting !== -1 && <Pending />}
       </div>
     );
   }

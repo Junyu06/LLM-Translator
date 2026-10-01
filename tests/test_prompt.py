@@ -49,6 +49,10 @@ class GlossaryTests(unittest.TestCase):
         self.assertEqual(terms_in("CAFÉ in MÜNCHEN", glossary), glossary)
         self.assertEqual(terms_in("decaféination", glossary), [])
 
+    def test_latin_terms_match_next_to_chinese(self):
+        self.assertEqual(terms_in("使用API接口", [("API", "应用程序接口")]), [("API", "应用程序接口")])
+        self.assertEqual(terms_in("RAPID", [("API", "应用程序接口")]), [])
+
     def test_index_uses_its_terminology_wording(self):
         prompt = build_prompt("Raise the context window to 8K.", family=ModelFamily.INDEX, target_lang="zh",
                               glossary=[("context window", "上下文窗口"), ("unused", "x")])

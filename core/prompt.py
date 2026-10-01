@@ -76,20 +76,31 @@ def _is_wide(ch: str) -> bool:
     return unicodedata.east_asian_width(ch) in "WF"
 
 
+def _continues_word(ch: str) -> bool:
+    """A letter or digit that would make a match part of a longer word. CJK
+    characters do not: `API` stands on its own in `使用API接口`."""
+    return ch.isalnum() and not _is_wide(ch)
+
+
+def _occurs_as_word(term: str, text: str) -> bool:
+    for match in re.finditer(re.escape(term), text, re.IGNORECASE):
+        before = text[match.start() - 1] if match.start() else ""
+        after = text[match.end()] if match.end() < len(text) else ""
+        if not (before and _continues_word(before)) and not (after and _continues_word(after)):
+            return True
+    return False
+
+
 def terms_in(text: str, glossary: Sequence[Term]) -> List[Term]:
     """Glossary terms that occur in `text`.
 
     Chinese, Japanese and Korean terms match anywhere (there are no spaces
     between words); other terms match whole words, ignoring case, so `café`
-    finds `CAFÉ` but not `decaféination`.
+    finds `CAFÉ` but not `decaféination`, and `API` finds `使用API接口`.
     """
     found: List[Term] = []
     for source, target in glossary:
-        if any(_is_wide(ch) for ch in source):
-            matched = source in text
-        else:
-            pattern = r"(?<!\w)" + re.escape(source) + r"(?!\w)"
-            matched = re.search(pattern, text, re.IGNORECASE) is not None
+        matched = source in text if any(_is_wide(ch) for ch in source) else _occurs_as_word(source, text)
         if matched:
             found.append((source, target))
     return found

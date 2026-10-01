@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -57,6 +57,9 @@ struct AppState {
     pending_clipboard_triggers: AtomicU64,
     // The quick window's page has loaded and registered its trigger.
     quick_ready: AtomicBool,
+    // Process ids of one-shot bridge commands still running (translate,
+    // read-clipboard, …), so quitting does not leave them behind.
+    bridge_pids: Mutex<HashSet<u32>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -408,6 +411,45 @@ pub(crate) fn bridge_process(app: &AppHandle, command: &str) -> Result<Command, 
     Ok(process)
 }
 
+// Keeps a one-shot bridge process in AppState::bridge_pids until it has been waited for.
+struct RegisteredBridge {
+    app: AppHandle,
+    pid: u32,
+}
+
+impl RegisteredBridge {
+    fn new(app: &AppHandle, pid: u32) -> Self {
+        app.state::<AppState>().bridge_pids.lock().unwrap().insert(pid);
+        Self { app: app.clone(), pid }
+    }
+}
+
+impl Drop for RegisteredBridge {
+    fn drop(&mut self) {
+        self.app.state::<AppState>().bridge_pids.lock().unwrap().remove(&self.pid);
+    }
+}
+
+fn kill_bridge_processes(state: &AppState) {
+    let pids: Vec<u32> = state.bridge_pids.lock().unwrap().drain().collect();
+    for pid in pids {
+        #[cfg(target_os = "windows")]
+        let mut command = {
+            let mut command = Command::new("taskkill");
+            command.args(["/F", "/T", "/PID", &pid.to_string()]);
+            hide_child_console(&mut command);
+            command
+        };
+        #[cfg(not(target_os = "windows"))]
+        let mut command = {
+            let mut command = Command::new("kill");
+            command.arg(pid.to_string());
+            command
+        };
+        let _ = command.stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
+}
+
 fn run_bridge(app: &AppHandle, command: &str, input: Option<&str>) -> Result<String, String> {
     let mut process = bridge_process(app, command)?;
     process
@@ -433,6 +475,8 @@ fn run_bridge(app: &AppHandle, command: &str, input: Option<&str>) -> Result<Str
         }
     };
 
+    let registered = RegisteredBridge::new(app, child.id());
+
     if let Some(payload) = input {
         if let Some(mut stdin) = child.stdin.take() {
             stdin
@@ -444,6 +488,7 @@ fn run_bridge(app: &AppHandle, command: &str, input: Option<&str>) -> Result<Str
     let output = child
         .wait_with_output()
         .map_err(|error| format!("Failed to read Python bridge output: {error}"))?;
+    drop(registered);
 
     if output.status.success() {
         return String::from_utf8(output.stdout)
@@ -502,6 +547,7 @@ fn quit_app(app: &AppHandle) {
     state.quitting.store(true, Ordering::Relaxed);
     stop_hotkey_listener(&state);
     let _ = cancel_running_translation(app, &state, None, false);
+    kill_bridge_processes(&state);
     app.exit(0);
 }
 
@@ -751,9 +797,10 @@ fn quick_frontend_ready(state: State<AppState>) {
     state.quick_ready.store(true, Ordering::Release);
 }
 
-// Esc or the close button (`return_focus`): without a visible main window,
-// hiding the app returns focus to the app the text was copied from. Clicking
-// another app only hides the window; that app already has focus.
+// Esc or the close button (`return_focus`): hiding the whole app, as Cmd+H
+// does, returns focus to the app the text was copied from; the main window
+// comes back when Translator is activated again. Clicking another app only
+// hides the window; that app already has focus.
 #[tauri::command]
 fn hide_quick_window(app: AppHandle, return_focus: bool) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(QUICK_WINDOW_LABEL) {
@@ -763,14 +810,10 @@ fn hide_quick_window(app: AppHandle, return_focus: bool) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     if return_focus {
-        let main_visible = main_window(&app)
-            .ok()
-            .and_then(|window| window.is_visible().ok())
-            .unwrap_or(false);
-        if !main_visible {
-            let _ = app.hide();
-        }
+        let _ = app.hide();
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = return_focus;
     Ok(())
 }
 
@@ -1436,6 +1479,7 @@ fn main() {
             frontend_ready: AtomicBool::new(false),
             pending_clipboard_triggers: AtomicU64::new(0),
             quick_ready: AtomicBool::new(false),
+            bridge_pids: Mutex::new(HashSet::new()),
         })
         .setup(|app| {
             startup_log("setup_start", None);
