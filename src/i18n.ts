@@ -76,6 +76,7 @@ const STRINGS = {
     history_no_match: "No matches.",
     history_clear: "Clear all",
     history_confirm_clear: "Delete all history",
+    history_confirm_note: "{count} items will be deleted.",
     cancel: "Cancel",
     delete: "Delete",
     close: "Close"
@@ -148,6 +149,7 @@ const STRINGS = {
     history_no_match: "没有匹配的记录。",
     history_clear: "全部删除",
     history_confirm_clear: "确认删除全部历史",
+    history_confirm_note: "将删除 {count} 条记录。",
     cancel: "取消",
     delete: "删除",
     close: "关闭"

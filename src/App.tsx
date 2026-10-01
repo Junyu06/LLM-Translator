@@ -95,6 +95,7 @@ export default function App() {
   const statusTimerRef = useRef<number | null>(null);
   const permissionPollRef = useRef<number | null>(null);
   const captureRef = useRef<() => Promise<void>>(async () => {});
+  const navRef = useRef<HTMLElement>(null);
 
   configRef.current = config;
   const t = translator(config.ui_lang);
@@ -504,7 +505,7 @@ export default function App() {
 
   return (
     <div className="app-container" style={{ fontSize: `${config.font_size}px` }}>
-      <nav className="app-nav">
+      <nav className="app-nav" ref={navRef}>
         <div className="segmented-control" role="group">
           <button className={`segment-btn ${!markdown ? "active" : ""}`} onClick={() => updateConfig({ translation_mode: "normal" })}>{t("mode_normal")}</button>
           <button className={`segment-btn ${markdown ? "active" : ""}`} onClick={() => updateConfig({ translation_mode: "markdown" })} title={t("mode_markdown_desc")}>{t("mode_markdown")}</button>
@@ -525,8 +526,8 @@ export default function App() {
             <button className={`segment-btn ${!bilingual ? "active" : ""}`} onClick={() => updateConfig({ output_mode: "translations_only" })}>{t("view_translation")}</button>
             <button className={`segment-btn ${bilingual ? "active" : ""}`} onClick={() => updateConfig({ output_mode: "interleaved" })} title={t("view_bilingual_desc")}>{t("view_bilingual")}</button>
           </div>
-          {iconButton("history", () => setShowHistory(true), <IconHistory />)}
-          {iconButton("settings", () => setShowSettings(true), <IconSettings />)}
+          {iconButton("history", () => setShowHistory(!showHistory), <IconHistory />, { active: showHistory })}
+          {iconButton("settings", () => { setShowHistory(false); setShowSettings(true); }, <IconSettings />)}
         </div>
       </nav>
 
@@ -624,6 +625,7 @@ export default function App() {
       {showHistory && (
         <HistoryDrawer
           t={t}
+          top={navRef.current ? Math.round(navRef.current.getBoundingClientRect().bottom + 8) : 0}
           history={history}
           onOpen={openHistoryItem}
           onDelete={(id) => setHistory((prev) => prev.filter((item) => item.id !== id))}

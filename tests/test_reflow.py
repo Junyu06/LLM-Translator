@@ -38,6 +38,16 @@ class ReflowTests(unittest.TestCase):
         text = "我们组上周把内部的翻译工具从混元换成了 Index，主要是看中它对网络\n用语的处理，测试下来效果还不错。"
         self.assertEqual(texts(text), ["我们组上周把内部的翻译工具从混元换成了 Index，主要是看中它对网络用语的处理，测试下来效果还不错。"])
 
+    def test_short_lines_next_to_long_paragraphs_are_not_joined(self):
+        text = (
+            "Now I'll write the unit file, the startup script, and a switcher script between the two.\n\n"
+            "Created 3 files, ran a command\n+46\n-0"
+        )
+        self.assertEqual(texts(text)[2:], ["Created 3 files, ran a command", "+46", "-0"])
+
+    def test_a_short_run_on_its_own_is_not_joined(self):
+        self.assertEqual(texts("Created 3 files, ran a command\n+46\n-0"), ["Created 3 files, ran a command", "+46", "-0"])
+
     def test_blank_lines_are_kept_as_passthrough(self):
         segments = split_paragraphs("One.\n\nTwo.")
         self.assertEqual([(s.text, s.kind) for s in segments], [("One.", "text"), ("", "blank"), ("Two.", "text")])

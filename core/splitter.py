@@ -36,10 +36,11 @@ class Segment:
 # starts a new paragraph.
 _CLOSING_CHARS = set(".!?;:。！？；：…\"'”’)）]】」』")
 _LINE_MARKER_RE = re.compile(r"^(?:[-*+•·▪●]\s|\d+[.)、]\s?|[a-zA-Z][.)]\s|#{1,6}\s|>)")
-# Lines shorter than this share of the longest line in their run are headings
+# Lines shorter than this share of the longest line in the text are headings
 # or short items, not lines wrapped by the page width.
 _WRAPPED_LINE_RATIO = 0.7
-_MIN_WRAP_WIDTH = 30
+# Text whose longest line is narrower than this was not wrapped by a page.
+_MIN_WRAP_WIDTH = 40
 
 
 def _width(text: str) -> int:
@@ -65,14 +66,16 @@ def _join_wrapped(left: str, right: str) -> str:
     return f"{left} {right}"
 
 
-def reflow_lines(lines: List[str]) -> List[str]:
+def reflow_lines(lines: List[str], wrap_width: int) -> List[str]:
     """Join lines that were broken by page width, not by the author.
 
-    `lines` is one run of non-blank, stripped lines.
+    `lines` is one run of non-blank, stripped lines. `wrap_width` is the
+    widest line of the whole text: a page wraps every paragraph at the same
+    width, while a short run on its own (a label, a counter) says nothing
+    about wrapping.
     """
     if len(lines) < 2:
         return list(lines)
-    wrap_width = max(_width(line) for line in lines)
     paragraphs = [lines[0]]
     previous = lines[0]
     for line in lines[1:]:
@@ -87,9 +90,10 @@ def reflow_lines(lines: List[str]) -> List[str]:
 def split_paragraphs(text: str) -> List[Segment]:
     segments: List[Segment] = []
     run: List[str] = []
+    wrap_width = max((_width(line.strip()) for line in text.splitlines()), default=0)
 
     def flush() -> None:
-        segments.extend(Segment(text=paragraph) for paragraph in reflow_lines(run))
+        segments.extend(Segment(text=paragraph) for paragraph in reflow_lines(run, wrap_width))
         run.clear()
 
     for line in text.splitlines():

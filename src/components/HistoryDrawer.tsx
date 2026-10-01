@@ -8,6 +8,8 @@ type T = (key: StringKey, values?: Record<string, string | number>) => string;
 
 type Props = {
   t: T;
+  // The drawer starts below the top bar, so the History button stays clickable and closes it.
+  top: number;
   history: HistoryItem[];
   onOpen: (item: HistoryItem) => void;
   onDelete: (id: string) => void;
@@ -20,7 +22,7 @@ const oneLine = (text: string) => text.replace(/\s+/g, " ");
 // Remember where the list was scrolled between openings.
 let savedScrollTop = 0;
 
-export default function HistoryDrawer({ t, history, onOpen, onDelete, onClear, onClose }: Props) {
+export default function HistoryDrawer({ t, top, history, onOpen, onDelete, onClear, onClose }: Props) {
   const [query, setQuery] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -40,22 +42,12 @@ export default function HistoryDrawer({ t, history, onOpen, onDelete, onClear, o
     : history;
 
   return (
-    <div className="overlay-mask drawer-mask" onClick={close}>
+    <div className="overlay-mask drawer-mask" style={{ top }} onClick={close}>
       <div className="drawer-card" onClick={(e) => e.stopPropagation()}>
         <div className="drawer-header">
           <div className="drawer-top-row">
             <h2 className="settings-title">{t("history")}</h2>
-            <div className="row-actions">
-              {history.length > 0 && (confirmClear ? (
-                <>
-                  <button className="secondary-btn-sm danger-btn" onClick={() => { onClear(); setConfirmClear(false); }}>{t("history_confirm_clear")}</button>
-                  <button className="secondary-btn-sm" onClick={() => setConfirmClear(false)}>{t("cancel")}</button>
-                </>
-              ) : (
-                <button className="secondary-btn-sm" onClick={() => setConfirmClear(true)}><IconTrash /> {t("history_clear")}</button>
-              ))}
-              <button className="icon-btn" onClick={close} title={t("close")}><IconX /></button>
-            </div>
+            <button className="icon-btn" onClick={close} title={t("close")}><IconX /></button>
           </div>
           {history.length > 0 && (
             <div className="history-search-container">
@@ -85,6 +77,19 @@ export default function HistoryDrawer({ t, history, onOpen, onDelete, onClear, o
             ))
           )}
         </div>
+        {history.length > 0 && (
+          <div className="drawer-footer">
+            {confirmClear ? (
+              <>
+                <span className="drawer-footer-note">{t("history_confirm_note", { count: history.length })}</span>
+                <button className="secondary-btn-sm" onClick={() => setConfirmClear(false)}>{t("cancel")}</button>
+                <button className="secondary-btn-sm danger-btn" onClick={() => { onClear(); setConfirmClear(false); }}>{t("history_confirm_clear")}</button>
+              </>
+            ) : (
+              <button className="text-btn" onClick={() => setConfirmClear(true)}><IconTrash /> {t("history_clear")}</button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

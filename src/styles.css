@@ -203,8 +203,13 @@ input:checked + .slider { background-color: var(--bg-accent); }
 input:checked + .slider:before { transform: translateX(18px); }
 
 /* ---------- history ---------- */
-.drawer-mask { justify-content: flex-end; }
-.drawer-card { height: 100%; width: 100%; max-width: 440px; background: var(--bg-app); box-shadow: var(--shadow-float); border-left: 1px solid var(--border-medium); display: flex; flex-direction: column; animation: slideIn 0.28s cubic-bezier(0.16, 1, 0.3, 1); }
+.drawer-mask { justify-content: flex-end; align-items: stretch; background: rgba(0, 0, 0, 0.12); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.drawer-card { width: 100%; max-width: 440px; margin: 0 20px 20px 0; background: var(--bg-app); box-shadow: var(--shadow-float); border: 1px solid var(--border-medium); border-radius: var(--radius-lg); display: flex; flex-direction: column; overflow: hidden; animation: slideIn 0.28s cubic-bezier(0.16, 1, 0.3, 1); }
+.drawer-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 10px 16px 14px; border-top: 1px solid var(--border-light); }
+.drawer-footer-note { flex: 1; font-size: 12.5px; color: var(--fg-muted); }
+.text-btn { display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; color: var(--fg-subtle); font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 6px 8px; border-radius: var(--radius-sm); font-family: inherit; }
+.text-btn svg { width: 14px; height: 14px; }
+.text-btn:hover { color: var(--danger); }
 .drawer-header { padding: 16px 20px 12px; display: flex; flex-direction: column; gap: 12px; }
 .drawer-top-row { display: flex; justify-content: space-between; align-items: center; }
 .history-search-container { position: relative; }
@@ -224,5 +229,5 @@ input:checked + .slider:before { transform: translateX(18px); }
 .history-delete-btn:hover { color: var(--danger); }
 
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+@keyframes slideIn { from { transform: translateX(24px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .overlay-mask, .drawer-card { animation: none; } }

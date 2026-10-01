@@ -209,10 +209,15 @@ def _recognize_text(cg_image) -> str:
     request = VNRecognizeTextRequest.alloc().init()
     request.setRecognitionLevel_(VNRequestTextRecognitionLevelAccurate)
     try:
-        request.setRecognitionLanguages_(
-            ["zh-Hans", "zh-Hant", "ja-JP", "ko-KR", "en-US"]
-        )
         request.setUsesLanguageCorrection_(True)
+        if request.respondsToSelector_("setAutomaticallyDetectsLanguage:"):
+            # A fixed list misreads whichever script is not first: with Chinese
+            # first, "I'll" came back as "T'll" and "command" as "commana".
+            request.setAutomaticallyDetectsLanguage_(True)
+        else:
+            request.setRecognitionLanguages_(
+                ["zh-Hans", "zh-Hant", "ja-JP", "ko-KR", "en-US"]
+            )
     except Exception:
         pass
     handler = VNImageRequestHandler.alloc().initWithCGImage_options_(cg_image, None)
