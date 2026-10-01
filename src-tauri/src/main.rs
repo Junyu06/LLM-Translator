@@ -112,6 +112,12 @@ fn startup_log(stage: &str, details: Option<&str>) {
 }
 
 fn workspace_root() -> Result<PathBuf, String> {
+    // The macOS app runs the Python bridge from a checkout. TRANSLATOR_BACKEND_ROOT
+    // at build time points it at a checkout other than the one being built,
+    // e.g. when building on another machine.
+    if let Some(root) = option_env!("TRANSLATOR_BACKEND_ROOT") {
+        return Ok(PathBuf::from(root));
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .map(PathBuf::from)

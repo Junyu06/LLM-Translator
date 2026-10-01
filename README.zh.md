@@ -2,61 +2,60 @@
 
 [English Readme](./README.md)
 
-本项目是一个本地翻译桌面工具，核心流程是：全局热键触发 → 读取剪贴板 → 发送到本地 Ollama → UI 显示译文。  
-它不训练模型，只调用 Ollama 中的量化模型（如 GGUF）进行推理。
+本项目是一个桌面翻译工具：连按两次复制 → 读取剪贴板（文字直接用，图片先做 OCR）→ 交给 Ollama 上的模型翻译 → 在界面里显示译文。
+它不训练模型，只调用 Ollama 里已有的模型做推理。
 
 ![Translator 主界面](./docs/images/main-window-markdown-mode.png)
 
-## 解决的问题
+## 功能
 
-传统翻译流程需要来回切换应用、粘贴、等待结果。本项目把这个流程缩短为“复制两次即可翻译”，适合日常阅读与工作场景。
+- 全局热键：macOS 是 Cmd+C Cmd+C，Windows 是 Ctrl+C Ctrl+C
+- 只看译文，或者对照：每段原文下面跟着它的译文
+- Markdown 模式保留标题、列表、引用和表格，代码原样不动
+- 剪贴板里是图片时，热键、剪贴板按钮、托盘菜单、粘贴到原文框，四个入口都会先做 OCR
+- Ollama 可以在本机，也可以在别的机器上
 
-## 功能特性
+## 翻译怎么做
 
-- 全局热键触发（Windows: Ctrl+C Ctrl+C；macOS: Cmd+C Cmd+C）
-- 两种输出模式：`translations_only` / `interleaved`
-- 支持 Markdown 模式，适合保留结构的文档翻译
-- 支持布局切换（vertical / horizontal）
-- 支持上下文分段翻译（Use Context）
-- OCR 识别图片粘贴文本（见下方说明）
-- 本地优先：默认使用本机 Ollama
-- 可切换 HTTP 模式，支持远程或 NAS 上的 Ollama 服务
+小型翻译模型看到整段上下文时，人名和术语前后更一致，也比一段一个请求快。所以 Translator：
 
-## 架构概览（文字说明）
+1. 先把一句话被拆成几行的文本（PDF 复制、OCR 结果）合回段落。
+2. 把连续的段落凑成约 700 token 一块，每块一次请求发出去，段落之间空一行；上一块最后几段的原文和译文作为前一轮对话带上。
+3. 把译文按段切开，和原文一一配对。模型合并或拆分了段落时，这一块改成一段一段重翻，对照不会错位。
 
-UI 层（平台相关）
-→ 监听热键、读取剪贴板、弹出 UI
+提示词按各模型的模型卡来写：
 
-Backend / 推理层
-→ 本地 Ollama 服务
-→ 加载量化模型
-→ 返回译文
+| 模型家族 | 从模型名里识别 | 提示词 |
+|---|---|---|
+| Index-Translate（哔哩哔哩） | `index-translate` | `请将以下文本翻译为{目标语言}，直接输出翻译结果，不要进行任何解释。` |
+| Hy-MT / HY-MT / Hunyuan-MT（腾讯） | `hy-mt`、`hunyuan-mt` | `将以下文本翻译为{目标语言}，注意只需要输出翻译后的结果，不要额外解释：` |
+| 其他模型 | | 一句普通的英文指令 |
 
-本项目不包含训练或微调流程。
+请求都带 `think: false`。Ollama 把 Index-Translate 当作推理模型，不带这个参数时渲染出的输入和模型训练时的格式不一致。
 
-## 翻译质量策略
+## OCR
 
-- 使用严格翻译提示词，尽量只输出译文
-- 通过分段与后处理提升稳定性
-- 目标是日常使用体验接近 DeepL，但不做夸大承诺
+- macOS：系统 Vision OCR
+- Windows：WinRT OCR（依赖系统 OCR 语言包）
 
-## OCR 说明
+剪贴板里同时有文字和图片时（Office 会这样放），用文字；文字只是这张图的文件名或网址时，用图片。
 
-- macOS：使用系统 Vision OCR
-- Windows：使用 WinRT OCR（依赖系统 OCR 语言包）
-- 如果系统未安装对应 OCR 语言包，图片粘贴可能无法识别
-- OCR 仅在图片粘贴时触发，不影响纯文本粘贴
+## 配置
 
-## 平台说明
+- macOS：`~/Library/Application Support/Translator/ui_config.json`
+- Windows：`%APPDATA%/Translator/ui_config.json`
+- 配置文件读不出来时，Translator 把它挪到旁边一个不覆盖旧备份的 `.corrupt` 文件，然后用默认配置。
 
-- Windows 端的 “Local” 模式内部会走 HTTP（127.0.0.1），用于避免 Python 客户端在 Windows 上卡住的情况
-- macOS 端直接使用本地客户端
+## 架构
 
-## 配置持久化
+- `src/`：React 界面
+- `src-tauri/`：Tauri 外壳：窗口、托盘、全局热键，以及调用 Python bridge 的命令
+- `python_backend/bridge.py`：每个命令一个进程（`translate-stream`、`read-clipboard`、`list-models` 等），通过 stdout 输出 JSON
+- `core/`：分段、提示词、分块翻译管线
+- `backend/`：Ollama HTTP 客户端
+- `ui_mac/ocr.py`、`ui_windows/`：OCR 和 Windows 热键监听
 
-- macOS：配置存储在 `~/Library/Application Support/Translator/ui_config.json`
-- Windows：配置存储在 `%APPDATA%/Translator/ui_config.json`
-- 如果配置文件无法读取或 JSON 损坏，Translator 会在原文件旁写入不覆盖旧证据的 `.corrupt` 备份，然后加载默认配置。
+macOS 版运行时从本仓库的一个 checkout（带 `.venv`）里调用 bridge。默认是编译 app 的那个目录；编译时设置 `TRANSLATOR_BACKEND_ROOT` 可以指向别的目录。Windows 版把 bridge 打进安装包（见 `AGENTS.md`）。
 
 ## 开发验证
 
@@ -64,18 +63,21 @@ Backend / 推理层
 python3 -m unittest discover -s tests -v
 npm run build:frontend
 cargo check --manifest-path src-tauri/Cargo.toml
+npm run tauri:dev
 ```
+
+`python3 python_backend/api_server.py` 在 8765 端口用 HTTP 提供同样的后端，配合 `npm run dev` 可以在浏览器里跑界面。
 
 设置 `TRANSLATOR_STARTUP_LOG=1`，并可选设置 `TRANSLATOR_STARTUP_LOG_FILE=<path>`，可以查看 Python bridge 启动阶段日志。
 
-## 限制与取舍
+## 限制
 
-- 翻译质量依赖所选模型
-- 长文本质量依赖分段策略
-- OCR 依赖系统语言包，可能需要手动安装
+- 翻译质量取决于模型
+- OCR 依赖系统语言包
+- Markdown 表格会被翻译，但显示成纯文本
 
 ## Roadmap
 
-- 继续打磨长文本分段与上下文控制
-- 术语表/词汇控制
-- 进一步抽象后端，方便切换到其他引擎
+- 术语表
+- 单独重翻或复制某一段
+- 热键弹出的快速翻译小窗

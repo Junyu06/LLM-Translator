@@ -1,188 +1,92 @@
 # Translator (Ollama Desktop)
 
-Translator is a local desktop translation tool built on top of Ollama.
+Translator is a desktop translation tool built on top of Ollama.
 
 ![Translator main window](./docs/images/main-window-markdown-mode.png)
 
 Its core workflow is:
 
-**Global hotkey → Read clipboard → Send text to local Ollama → Display translation in UI**
+**Copy twice → read the clipboard (text, or an image through OCR) → translate with an Ollama model → show the translation**
 
-This project does **not** train or fine-tune models.  
-It only performs inference by calling quantized models (e.g. GGUF) already available in Ollama.
+This project does **not** train or fine-tune models.
+It only runs inference against models already available in Ollama.
 
 [中文说明](./README.zh.md)
 
 ---
 
-## Problem It Solves
-
-Traditional translation workflows require switching applications, pasting text, and waiting for results.
-
-Translator reduces this friction to a single action:  
-**copy text twice to get an instant translation**, making it well suited for daily reading and work scenarios.
-
----
-
 ## Features
 
-- Global hotkey trigger  
-  - Windows: `Ctrl + C, Ctrl + C`  
-  - macOS: `Cmd + C, Cmd + C`
-- Two output modes:
-  - `translations_only`
-  - `interleaved`
-- Markdown mode for structure-preserving document translation
-- Layout switching:
-  - vertical / horizontal
-- Context-aware segmented translation (`Use Context`)
-- OCR support for image clipboard content (see below)
-- Local-first design:
-  - Uses local Ollama by default
-- HTTP mode support:
-  - Allows connecting to remote or NAS-hosted Ollama services
+- Global hotkey: `Cmd+C Cmd+C` on macOS, `Ctrl+C Ctrl+C` on Windows
+- Translation only, or side by side with each source paragraph above its translation
+- Markdown mode keeps headings, lists, quotes and tables, and leaves code untouched
+- Images on the clipboard go through system OCR from every entry point: the hotkey, the clipboard button, the tray menu, and pasting into the source box
+- Ollama on this machine or on another host
 
----
+## How translation works
 
-## Architecture Overview
+Small translation models keep names and terms consistent across a passage when they see the whole passage, and they are faster that way than with one request per paragraph. So Translator:
 
-**UI Layer (platform-specific)**  
-→ Listens for global hotkeys  
-→ Reads clipboard content  
-→ Displays translation UI
+1. Joins lines broken in the middle of a sentence (text copied from a PDF, OCR output) back into paragraphs.
+2. Groups consecutive paragraphs into chunks of about 700 tokens and sends each chunk in one request, paragraphs separated by blank lines. The last paragraphs of the previous chunk go along as an earlier chat turn.
+3. Splits the reply back into paragraphs and pairs each with its source. If the model merged or split paragraphs, that chunk is translated again one paragraph at a time, so pairs never drift.
 
-**Backend / Inference Layer**  
-→ Local Ollama service  
-→ Loads quantized models  
-→ Returns translated text
+Prompts follow each model's card:
 
-This project does **not** include any training or fine-tuning pipeline.
+| Model family | Detected from the model name | Prompt |
+|---|---|---|
+| Index-Translate (bilibili) | `index-translate` | `请将以下文本翻译为{目标语言}，直接输出翻译结果，不要进行任何解释。` |
+| Hy-MT / HY-MT / Hunyuan-MT (Tencent) | `hy-mt`, `hunyuan-mt` | `将以下文本翻译为{目标语言}，注意只需要输出翻译后的结果，不要额外解释：` |
+| Anything else | | A plain English instruction |
 
----
+Requests send `think: false`. Ollama treats Index-Translate as a reasoning model, and without the flag the prompt it renders differs from the format the model was trained on.
 
-## Translation Quality Strategy
+## OCR
 
-- Uses strict translation prompts to minimize non-translation output
-- Improves stability through segmentation and post-processing
-- The goal is to achieve a daily-use experience close to DeepL  
-  (without exaggerated quality claims)
+- **macOS**: system Vision OCR
+- **Windows**: WinRT OCR (requires the system OCR language packs)
 
----
+When the clipboard holds both text and a picture (Office does this), the text wins. A picture wins when the only text is its file name or URL.
 
-## OCR Support
+## Configuration
 
-- **macOS**: Uses system Vision OCR
-- **Windows**: Uses WinRT OCR (requires installed system OCR language packs)
+- **macOS**: `~/Library/Application Support/Translator/ui_config.json`
+- **Windows**: `%APPDATA%/Translator/ui_config.json`
 
-Notes:
-- If the required OCR language pack is not installed, image clipboard text may not be recognized
-- OCR is only triggered for image clipboard content
-- Plain text clipboard usage is unaffected
+If the config file is unreadable, Translator moves it aside with a no-clobber `.corrupt` suffix and loads defaults.
 
----
+## Architecture
 
-## Platform Notes
+- `src/`: React UI
+- `src-tauri/`: Tauri shell: window, tray, global hotkey, and the commands that run the Python bridge
+- `python_backend/bridge.py`: one process per command (`translate-stream`, `read-clipboard`, `list-models`, …), JSON over stdout
+- `core/`: splitting, prompts, chunked translation pipeline
+- `backend/`: Ollama HTTP client
+- `ui_mac/ocr.py`, `ui_windows/`: OCR and the Windows hotkey listener
 
-- On **Windows**, the “Local” mode internally uses HTTP (`127.0.0.1`)  
-  to avoid potential blocking issues with the Python client
-- On **macOS**, the local Ollama client is used directly
+On macOS the app runs the bridge from a checkout of this repository with its `.venv`. By default that is the checkout the app was built from; set `TRANSLATOR_BACKEND_ROOT` at build time to point at another one. Windows builds bundle the bridge (see `AGENTS.md`).
 
----
-
-## Configuration Persistence
-
-- **macOS**:  
-  `~/Library/Application Support/Translator/ui_config.json`
-- **Windows**:  
-  `%APPDATA%/Translator/ui_config.json`
-
-If the config file is unreadable or malformed, Translator backs it up beside the original file with a no-clobber `.corrupt` suffix and loads defaults.
-
----
-
-## Development Validation
+## Development
 
 ```bash
 python3 -m unittest discover -s tests -v
 npm run build:frontend
 cargo check --manifest-path src-tauri/Cargo.toml
-```
-
-Set `TRANSLATOR_STARTUP_LOG=1` and optionally `TRANSLATOR_STARTUP_LOG_FILE=<path>` to inspect Python bridge startup stages.
-
----
-
-## Limitations & Trade-offs
-
-- Translation quality depends on the selected model
-- Long-text quality depends on segmentation strategy
-- OCR relies on system language packs and may require manual installation
-
----
-
-## Roadmap
-
-- Improved long-text segmentation and context control
-- Glossary / terminology control
-- Further backend abstraction to support alternative inference engines
-
----
-
-## React + Python + Tauri Migration Baseline
-
-This repository now includes the React + Tauri migration baseline described in [react_python_tauri_plan.md](/Users/teriri/WIP_CODE/GitHub/Translator/react_python_tauri_plan.md), plus the first slice of Phase 3 native shell work:
-
-- `python_backend/`
-  - Tk-independent translation service
-  - local HTTP API for `/health`, `/config`, `/translate`
-- `src/`
-  - shared React UI shell wired to the Python API contract
-- `src-tauri/`
-  - Tauri desktop shell with Python bridge commands
-  - system tray menu with reopen / translate clipboard / quit
-  - close-to-tray behavior driven by persisted config
-
-### Backend API
-
-Run the extracted Python API locally:
-
-```bash
-python3 python_backend/api_server.py
-```
-
-Endpoints:
-
-- `GET /health`
-- `GET /config`
-- `PUT /config`
-- `POST /translate`
-
-`POST /ocr` is still reserved for the later native parity phase.
-
-### Frontend Shell
-
-Install dependencies and run the shared frontend:
-
-```bash
-npm install
-npm run dev
-```
-
-### Tauri Shell
-
-Tauri requires a Rust toolchain. Verify `cargo --version` and `rustc --version` first.
-
-If they are missing on macOS, install Rust with:
-
-```bash
-curl https://sh.rustup.rs -sSf | sh
-source "$HOME/.cargo/env"
-```
-
-Then run:
-
-```bash
 npm run tauri:dev
 ```
 
-This is still not full feature parity with the Tk apps. Tray behavior, clipboard translation, Markdown-capable desktop UI, backend error recovery, and config/history resilience are now present in the new shell, while some native OCR and Windows installer behavior still need release-machine verification.
+`python3 python_backend/api_server.py` serves the same backend over HTTP on port 8765 for running the UI in a browser with `npm run dev`.
+
+Set `TRANSLATOR_STARTUP_LOG=1` and optionally `TRANSLATOR_STARTUP_LOG_FILE=<path>` to inspect Python bridge startup stages.
+
+## Limitations
+
+- Translation quality depends on the model
+- OCR relies on system language packs
+- Markdown tables are translated but render as plain text
+
+## Roadmap
+
+- Glossary / terminology control
+- Re-translate or copy a single paragraph
+- A small quick-translate window for the hotkey
