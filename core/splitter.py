@@ -109,6 +109,7 @@ _FENCE_RE = re.compile(r"^(?P<indent> {0,3})(?P<fence>`{3,}|~{3,})")
 _LIST_MARKER_RE = re.compile(r"^ {0,3}(?:[-+*]\s+\S|\d+[.)]\s+\S)")
 _HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
 _DEFINITION_START_RE = re.compile(r"^ {0,3}\[[^\]]+\]:[ \t]*$")
+_DEFINITION_TITLE_RE = re.compile(r"""^[ \t]*("[^"]*"|'[^']*'|\([^)]*\))[ \t]*$""")
 
 
 def _is_blank(line: str) -> bool:
@@ -137,6 +138,38 @@ def _is_any_fence(line: str) -> bool:
     return stripped.startswith("```") or stripped.startswith("~~~")
 
 
+def _without_list_marker(line: str) -> str:
+    match = _LIST_MARKER_RE.match(line)
+    return line[match.end() - 1:] if match else line
+
+
+def _starts_item_with_code(line: str) -> bool:
+    """`- ```python`: a list item whose first line opens a code fence."""
+    return _is_list_marker(line) and _is_any_fence(_without_list_marker(line))
+
+
+def _take_list_item_with_code(lines: List[str], start: int) -> tuple[List[str], int]:
+    fence = _without_list_marker(lines[start]).lstrip()
+    marker = fence[0] * (len(fence) - len(fence.lstrip(fence[0])))
+    index = start + 1
+    while index < len(lines):
+        if lines[index].lstrip().startswith(marker):
+            return lines[start:index + 1], index + 1
+        index += 1
+    return lines[start:], len(lines)
+
+
+def list_items(text: str) -> List[str]:
+    """Split a list block into its top-level items, continuation lines included."""
+    items: List[str] = []
+    for line in text.split("\n"):
+        if _LIST_MARKER_RE.match(line) and not line.startswith("    ") or not items:
+            items.append(line)
+        else:
+            items[-1] += "\n" + line
+    return items
+
+
 def _quote_contains_code(block: List[str]) -> bool:
     """Fenced or indented code anywhere inside a (possibly nested) blockquote."""
     for line in block:
@@ -145,7 +178,7 @@ def _quote_contains_code(block: List[str]) -> bool:
             content = content.lstrip()[1:]
             if content.startswith(" "):
                 content = content[1:]
-        if _is_any_fence(content) or (_is_indented(content) and content.strip()):
+        if _is_any_fence(_without_list_marker(content)) or (_is_indented(content) and content.strip()):
             return True
     return False
 
@@ -259,7 +292,7 @@ def _take_list(lines: List[str], start: int) -> tuple[List[str], int]:
     while index < len(lines):
         line = lines[index]
         # Code nested in a list item becomes its own protected block.
-        if _is_any_fence(line):
+        if _is_any_fence(line) or (block and _starts_item_with_code(line)):
             break
         if _is_list_marker(line) or (_is_list_continuation(line) and not _is_blank(line)):
             block.append(line)
@@ -336,6 +369,9 @@ def split_markdown_blocks(text: str) -> List[Segment]:
             # A quote that contains code is kept whole; splitting it would break the quote.
             if _quote_contains_code(block):
                 protected = True
+        elif _starts_item_with_code(line):
+            block, index = _take_list_item_with_code(lines, index)
+            protected, kind = True, "list"
         elif _is_list_marker(line):
             block, index = _take_list(lines, index)
             kind = "list"
@@ -361,17 +397,20 @@ _CODE_SPAN_RE = re.compile(r"(`+).+?\1", re.DOTALL)
 
 
 def _is_definition_block(block: List[str]) -> bool:
-    """Every line is a one-line definition, or a definition whose URL and title
-    follow on indented lines."""
+    """Every line belongs to a definition: `[label]: url "title"`, or the URL
+    and title on following lines. A definition cannot interrupt a paragraph,
+    so a block that starts with prose is not one."""
     if not block:
         return False
-    after_start = False
+    after_start = after_definition = False
     for line in block:
         if _DEFINITION_RE.match(line):
-            after_start = False
+            after_start, after_definition = False, True
         elif _DEFINITION_START_RE.match(line):
-            after_start = True
-        elif not (after_start and line[:1].isspace() and line.strip()):
+            after_start, after_definition = True, False
+        elif after_start and line[:1].isspace() and line.strip():
+            after_definition = True
+        elif not (after_definition and _DEFINITION_TITLE_RE.match(line)):
             return False
     return True
 
@@ -395,7 +434,7 @@ def _inline_reference_links(segments: List[Segment]) -> List[Segment]:
         for line in segment.text.splitlines():
             match = _DEFINITION_RE.match(line)
             if match:
-                url = match.group("url").strip("<>")
+                url = match.group("url")  # <...> stays: it is valid in an inline link too
                 title = f" {match.group('title')}" if match.group("title") else ""
                 targets.setdefault(_normalize_label(match.group("label")), f"{url}{title}")
     if not targets:

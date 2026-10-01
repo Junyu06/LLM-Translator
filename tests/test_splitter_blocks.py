@@ -80,7 +80,7 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         self.assertEqual(
             segments[0].text,
             'See [the docs](https://example.com/docs "Docs"), [Site](https://example.com/docs "Docs") '
-            'and [site](https://example.com/docs "Docs"), plus ![logo](https://example.com/logo.png).',
+            'and [site](https://example.com/docs "Docs"), plus ![logo](<https://example.com/logo.png>).',
         )
         self.assertEqual((segments[1].kind, segments[1].protected), ("link_definitions", True))
 
@@ -107,6 +107,24 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
     def test_brackets_without_a_definition_are_left_alone(self):
         segments = split_markdown_blocks("Press [Enter] to continue.")
         self.assertEqual(segments[0].text, "Press [Enter] to continue.")
+
+    def test_angle_bracket_destination_is_kept_intact(self):
+        segments = split_markdown_blocks("See [spec].\n\n[spec]: <https://example.com/a b)c>")
+        self.assertEqual(segments[0].text, "See [spec](<https://example.com/a b)c>).")
+
+    def test_list_item_opening_with_a_code_fence_is_protected(self):
+        text = "- ```python\n  keep()\n  ```\n- Translate this item."
+        segments = split_markdown_blocks(text)
+        self.assertEqual([(s.kind, s.protected) for s in segments], [("list", True), ("list", False)])
+        self.assertEqual(segments[1].text, "- Translate this item.")
+
+    def test_quote_with_list_item_code_is_kept_whole(self):
+        segments = split_markdown_blocks("> - ```python\n>   keep()\n>   ```")
+        self.assertTrue(segments[0].protected)
+
+    def test_definition_with_title_on_next_line_is_protected(self):
+        segments = split_markdown_blocks('Text.\n\n[site]: https://example.com\n"Title"')
+        self.assertEqual((segments[1].kind, segments[1].protected), ("link_definitions", True))
 
 
 if __name__ == "__main__":

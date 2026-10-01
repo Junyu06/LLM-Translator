@@ -41,15 +41,18 @@ const isHistoryItem = (value: unknown): value is HistoryItem => {
 export function loadHistory(): HistoryItem[] {
   const saved = readStorage(HISTORY_KEY);
   if (!saved) return [];
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(saved);
-    if (Array.isArray(parsed)) return parsed.filter(isHistoryItem);
+    parsed = JSON.parse(saved);
   } catch (error) {
     console.error(error);
   }
-  // Keep the unreadable value instead of overwriting it on the next save.
-  writeStorage(`${HISTORY_KEY}_corrupt_${Date.now()}`, saved);
-  return [];
+  const items = Array.isArray(parsed) ? parsed.filter(isHistoryItem) : [];
+  if (!Array.isArray(parsed) || items.length !== parsed.length) {
+    // Keep the original value before the next save drops what could not be read.
+    writeStorage(`${HISTORY_KEY}_corrupt_${Date.now()}`, saved);
+  }
+  return items;
 }
 
 export function saveHistory(history: HistoryItem[]) {

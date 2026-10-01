@@ -21,7 +21,7 @@ from enum import Enum
 from typing import Callable, Iterator, List
 
 from .postprocess import extract_translation, strip_reasoning
-from .splitter import Segment
+from .splitter import Segment, list_items
 
 ChatStream = Callable[[List[dict]], Iterator[str]]
 PromptFor = Callable[[str], str]
@@ -88,33 +88,67 @@ def plan_chunks(segments: List[Segment], opt: PipelineOptions) -> List[List[int]
 
 
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+|(?<=[。！？；])")
+# Never cut inside these: Markdown links and images, code spans, autolinks, bare URLs.
+_ATOMIC_RE = re.compile(r"!?\[[^\]\n]*\]\([^)\n]*\)|(`+).+?\1|<[^>\s]+>|https?://\S+", re.DOTALL)
 
 
 def split_long_segments(segments: List[Segment], max_tokens: int) -> List[Segment]:
-    """Cut paragraphs too long for one request into sentence groups.
+    """Cut paragraphs and lists too long for one request.
 
-    A paragraph whose source and translation together exceed Ollama's default
+    A block whose source and translation together exceed Ollama's default
     context would be silently truncated, so it is translated in parts, each
-    shown as its own pair. Only plain paragraphs are cut; a Markdown paragraph's
-    soft line breaks become spaces, which renders the same.
+    shown as its own pair. Paragraphs are cut at sentence ends, lists between
+    items. Cuts never land inside a link, code span or URL. A Markdown
+    paragraph's soft line breaks become spaces, which renders the same.
     """
     result: List[Segment] = []
     for segment in segments:
-        if not segment.translatable or segment.kind != "text" or estimate_tokens(segment.text) <= max_tokens:
+        if not segment.translatable or estimate_tokens(segment.text) <= max_tokens:
             result.append(segment)
-            continue
-        part = ""
-        sentences = (s for s in _SENTENCE_END_RE.split(segment.text) if s.strip())
-        for sentence in (piece for s in sentences for piece in _cut_sentence(s, max_tokens)):
-            joined = f"{part} {sentence}".strip() if part and not _ends_cjk(part) else part + sentence
-            if part and estimate_tokens(joined) > max_tokens:
-                result.append(Segment(text=part.strip()))
-                part = sentence
-            else:
-                part = joined
-        if part.strip():
-            result.append(Segment(text=part.strip()))
+        elif segment.kind == "text":
+            pieces = (piece for s in _sentences(segment.text) for piece in _cut_sentence(s, max_tokens))
+            result.extend(Segment(text=part) for part in _pack(pieces, max_tokens, _join_sentences))
+        elif segment.kind == "list":
+            parts = _pack(list_items(segment.text), max_tokens, lambda a, b: f"{a}\n{b}")
+            result.extend(Segment(text=part, kind="list") for part in parts)
+        else:
+            result.append(segment)
     return result
+
+
+def _pack(pieces, max_tokens: int, join) -> List[str]:
+    parts: List[str] = []
+    part = ""
+    for piece in pieces:
+        joined = join(part, piece) if part else piece
+        if part and estimate_tokens(joined) > max_tokens:
+            parts.append(part.strip())
+            part = piece
+        else:
+            part = joined
+    if part.strip():
+        parts.append(part.strip())
+    return parts
+
+
+def _join_sentences(left: str, right: str) -> str:
+    return left + right if _ends_cjk(left) else f"{left} {right}"
+
+
+def _outside(position: int, spans: List[tuple]) -> bool:
+    return not any(start < position < end for start, end in spans)
+
+
+def _sentences(text: str) -> List[str]:
+    spans = [match.span() for match in _ATOMIC_RE.finditer(text)]
+    pieces, last = [], 0
+    for match in _SENTENCE_END_RE.finditer(text):
+        if match.start() <= last or not _outside(match.start(), spans):
+            continue
+        pieces.append(text[last:match.start()])
+        last = match.end()
+    pieces.append(text[last:])
+    return [piece for piece in pieces if piece.strip()]
 
 
 def _cut_sentence(sentence: str, max_tokens: int) -> List[str]:
@@ -130,6 +164,10 @@ def _cut_sentence(sentence: str, max_tokens: int) -> List[str]:
         mark = max(rest.rfind(c, 0, cut) for c in " ,，、;；:：")
         if mark > cut // 2:
             cut = mark + 1
+        for start, end in (match.span() for match in _ATOMIC_RE.finditer(rest)):
+            if start < cut < end:
+                cut = start if start > 0 else end
+                break
         pieces.append(rest[:cut])
         rest = rest[cut:]
     pieces.append(rest)

@@ -10,6 +10,7 @@ from core import (
     Segment,
     build_prompt,
     detect_family,
+    estimate_tokens,
     iter_translation,
     pairs_from,
     render_output,
@@ -21,8 +22,11 @@ from core import (
 from ..models import SegmentResult, TranslationRequest, TranslationResponse
 
 
-# Longer paragraphs are cut at sentence ends; see split_long_segments.
+# Longer paragraphs and lists are cut; see split_long_segments.
 LONG_PARAGRAPH_TOKENS = 1200
+# A block still longer than this (one huge heading, quote or table) is refused:
+# with its translation it would not fit Ollama's default 4096-token context.
+MAX_BLOCK_TOKENS = 1500
 
 
 class TranslationFailed(Exception):
@@ -155,6 +159,14 @@ class TranslationService:
             raise ValueError(
                 f"Too many translation segments ({len(translatable)} segments; limit is {max_segments})."
             )
+
+        for index, segment in enumerate(translatable, start=1):
+            tokens = estimate_tokens(segment.text)
+            if tokens > MAX_BLOCK_TOKENS:
+                raise ValueError(
+                    f"Block {index} is too long to translate in one request (about {tokens} tokens; "
+                    f"limit {MAX_BLOCK_TOKENS}). Break it into shorter paragraphs."
+                )
 
         if max_segment_chars:
             for index, segment in enumerate(translatable, start=1):

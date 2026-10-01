@@ -136,6 +136,12 @@ class TranslationServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "segment is too large"):
             list(TranslationService().stream_translate(TranslationRequest(text="abcdef", max_segment_chars=5)))
 
+    def test_rejects_a_block_too_long_for_one_request(self):
+        with self.assertRaisesRegex(ValueError, "too long to translate in one request"):
+            list(TranslationService().stream_translate(
+                TranslationRequest(text="# " + "长" * 3000, translation_mode="markdown", model="m")
+            ))
+
     def test_rejects_too_many_segments(self):
         with self.assertRaisesRegex(ValueError, "Too many translation segments"):
             list(TranslationService().stream_translate(

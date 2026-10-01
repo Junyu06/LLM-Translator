@@ -70,6 +70,20 @@ class LongParagraphTests(unittest.TestCase):
         self.assertTrue(all(estimate_tokens(p.text) <= 300 for p in parts))
         self.assertEqual("".join(p.text for p in parts), text)
 
+    def test_cuts_never_split_a_markdown_link(self):
+        link = "[docs](https://example.com/" + "a" * 40 + ")"
+        text = ("长" * 250 + link) * 6
+        parts = split_long_segments([Segment(text)], max_tokens=300)
+        self.assertGreater(len(parts), 1)
+        self.assertEqual(sum(p.text.count(link) for p in parts), 6)
+
+    def test_long_list_is_split_between_items(self):
+        items = [f"- 第{i}条：" + "这是一条很长的列表说明。" * 30 for i in range(20)]
+        parts = split_long_segments([Segment("\n".join(items), kind="list")], max_tokens=300)
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(p.kind == "list" and p.text.startswith("- 第") for p in parts))
+        self.assertEqual("\n".join(p.text for p in parts), "\n".join(items))
+
     def test_short_paragraphs_and_code_are_left_alone(self):
         segments = [Segment("Short."), Segment("x = 1\n" * 2000, protected=True, kind="fenced_code")]
         self.assertEqual(split_long_segments(segments, max_tokens=300), segments)
