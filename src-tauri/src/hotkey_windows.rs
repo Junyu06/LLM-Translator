@@ -66,7 +66,7 @@ impl WindowsHotkeyListener {
 
                 match serde_json::from_str::<Value>(&line) {
                     Ok(payload) if payload.get("event").and_then(Value::as_str) == Some("trigger") => {
-                        if let Err(error) = crate::emit_clipboard_translation_request(&app_for_thread) {
+                        if let Err(error) = crate::handle_double_copy(&app_for_thread) {
                             eprintln!("hotkey_windows: failed to trigger clipboard translation: {error}");
                         }
                     }

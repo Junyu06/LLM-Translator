@@ -58,6 +58,7 @@ class AppConfig:
     glossary: str = ""
     prompt_style: str = "auto"
     custom_prompt: str = ""
+    quick_window: bool = True
 
     def __post_init__(self) -> None:
         _require_string_choice("source_lang", self.source_lang, LANGUAGES)
@@ -79,6 +80,7 @@ class AppConfig:
         _require_str("glossary", self.glossary)
         _require_string_choice("prompt_style", self.prompt_style, PROMPT_STYLES)
         _require_str("custom_prompt", self.custom_prompt)
+        _require_bool("quick_window", self.quick_window)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

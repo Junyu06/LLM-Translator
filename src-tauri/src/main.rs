@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -31,7 +31,9 @@ const EVENT_TRAY_OPENED: &str = "translator://tray-opened";
 const EVENT_HOTKEY_ERROR: &str = "translator://hotkey-error";
 #[cfg(target_os = "windows")]
 const BRIDGE_RESOURCE_EXE: &str = "translator-bridge.exe";
-#[cfg(target_os = "windows")]
+#[cfg(target_os = "macos")]
+const BRIDGE_RESOURCE_EXE: &str = "translator-bridge";
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const BRIDGE_RESOURCE_DIR: &str = "translator-bridge";
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -53,6 +55,8 @@ struct AppState {
     hotkey_starting: AtomicBool,
     frontend_ready: AtomicBool,
     pending_clipboard_triggers: AtomicU64,
+    // The quick window's page has loaded and registered its trigger.
+    quick_ready: AtomicBool,
 }
 
 #[cfg(target_os = "macos")]
@@ -218,7 +222,8 @@ fn default_config() -> Value {
         "ui_lang": "en",
         "glossary": "",
         "prompt_style": "auto",
-        "custom_prompt": ""
+        "custom_prompt": "",
+        "quick_window": true
     })
 }
 
@@ -332,7 +337,8 @@ fn tray_icon_image() -> Result<tauri::image::Image<'static>, String> {
         .map_err(|error| format!("Failed to load tray icon: {error}"))
 }
 
-#[cfg(target_os = "windows")]
+// The bridge PyInstaller built into the app's resources (see Translator_bridge_*.spec).
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn bridge_resource_executable(app: &AppHandle) -> Option<PathBuf> {
     let mut candidates = Vec::new();
 
@@ -365,13 +371,13 @@ fn bridge_resource_executable(app: &AppHandle) -> Option<PathBuf> {
     None
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn is_executable_file(path: &Path) -> bool {
     path.is_file()
 }
 
 pub(crate) fn bridge_process(app: &AppHandle, command: &str) -> Result<Command, String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         if let Some(executable) = bridge_resource_executable(app) {
             let mut process = Command::new(executable);
@@ -380,7 +386,10 @@ pub(crate) fn bridge_process(app: &AppHandle, command: &str) -> Result<Command, 
             return Ok(process);
         }
 
-        #[cfg(not(debug_assertions))]
+        // A Windows release always ships the bridge. A macOS build without it
+        // (development, or built without tauri.macos-bridge.conf.json) runs
+        // the bridge from the source checkout below.
+        #[cfg(all(target_os = "windows", not(debug_assertions)))]
         {
             return Err(format!(
                 "Packaged Python bridge resource not found. Expected {BRIDGE_RESOURCE_DIR}/{BRIDGE_RESOURCE_EXE} in the app resources directory."
@@ -388,7 +397,7 @@ pub(crate) fn bridge_process(app: &AppHandle, command: &str) -> Result<Command, 
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let _ = app;
 
     let root = workspace_root()?;
@@ -631,6 +640,149 @@ pub(crate) fn emit_clipboard_translation_request(app: &AppHandle) -> Result<(), 
         + 1;
     eprintln!("main: queued clipboard trigger after eval failures (pending={pending})");
     Err(last_error.unwrap_or_else(|| "Failed to eval clipboard trigger.".to_string()))
+}
+
+// ---------- quick window ----------
+//
+// Copying twice shows the translation in a small window next to the pointer
+// instead of bringing up the main window. Esc or the close button hides it
+// and hands focus back to the app the text came from.
+
+const QUICK_WINDOW_LABEL: &str = "quick";
+const QUICK_WIDTH: f64 = 460.0;
+const QUICK_HEIGHT: f64 = 300.0;
+
+fn quick_window_enabled() -> bool {
+    load_config_value()
+        .get("quick_window")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+fn create_quick_window(app: &AppHandle) -> Result<(), String> {
+    if app.get_webview_window(QUICK_WINDOW_LABEL).is_some() {
+        return Ok(());
+    }
+    let builder = tauri::WebviewWindowBuilder::new(app, QUICK_WINDOW_LABEL, tauri::WebviewUrl::App("index.html".into()))
+        .title("Translator")
+        .inner_size(QUICK_WIDTH, QUICK_HEIGHT)
+        .min_inner_size(320.0, 160.0)
+        .resizable(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false);
+    builder
+        .build()
+        .map(|_| ())
+        .map_err(|error| format!("Failed to create quick window: {error}"))
+}
+
+// Below and to the right of the pointer, flipped to stay on its screen.
+fn place_near_pointer(app: &AppHandle, window: &tauri::WebviewWindow) {
+    let Ok(pointer) = app.cursor_position() else {
+        return;
+    };
+    let Ok(Some(monitor)) = app.monitor_from_point(pointer.x, pointer.y) else {
+        return;
+    };
+    let size = window
+        .outer_size()
+        .map(|size| (size.width as f64, size.height as f64))
+        .unwrap_or((QUICK_WIDTH * monitor.scale_factor(), QUICK_HEIGHT * monitor.scale_factor()));
+    let gap = 14.0 * monitor.scale_factor();
+    let area = monitor.work_area();
+    let (left, top) = (area.position.x as f64, area.position.y as f64);
+    let (right, bottom) = (left + area.size.width as f64, top + area.size.height as f64);
+    let mut x = pointer.x + gap;
+    let mut y = pointer.y + gap;
+    if x + size.0 > right {
+        x = (pointer.x - size.0 - gap).max(left);
+    }
+    if y + size.1 > bottom {
+        y = (pointer.y - size.1 - gap).max(top);
+    }
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+fn show_quick_translation(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(QUICK_WINDOW_LABEL)
+        .ok_or_else(|| "Quick window not found".to_string())?;
+    // Let the source app finish the second copy before the window reads the clipboard.
+    std::thread::sleep(std::time::Duration::from_millis(140));
+    place_near_pointer(app, &window);
+    window
+        .eval("window.__translatorQuickTranslate && window.__translatorQuickTranslate()")
+        .map_err(|error| format!("Failed to start quick translation: {error}"))?;
+    #[cfg(target_os = "macos")]
+    let _ = app.show();
+    window
+        .show()
+        .map_err(|error| format!("Failed to show quick window: {error}"))?;
+    window
+        .set_focus()
+        .map_err(|error| format!("Failed to focus quick window: {error}"))?;
+    Ok(())
+}
+
+// Copying twice: the quick window when it is on and loaded, otherwise the main window.
+pub(crate) fn handle_double_copy(app: &AppHandle) -> Result<(), String> {
+    let ready = app.state::<AppState>().quick_ready.load(Ordering::Acquire);
+    if ready && quick_window_enabled() {
+        match show_quick_translation(app) {
+            Ok(()) => return Ok(()),
+            Err(error) => eprintln!("main: quick window failed, using the main window: {error}"),
+        }
+    }
+    emit_clipboard_translation_request(app)
+}
+
+#[tauri::command]
+fn quick_frontend_ready(state: State<AppState>) {
+    state.quick_ready.store(true, Ordering::Release);
+}
+
+// Esc or the close button (`return_focus`): without a visible main window,
+// hiding the app returns focus to the app the text was copied from. Clicking
+// another app only hides the window; that app already has focus.
+#[tauri::command]
+fn hide_quick_window(app: AppHandle, return_focus: bool) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(QUICK_WINDOW_LABEL) {
+        window
+            .hide()
+            .map_err(|error| format!("Failed to hide quick window: {error}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    if return_focus {
+        let main_visible = main_window(&app)
+            .ok()
+            .and_then(|window| window.is_visible().ok())
+            .unwrap_or(false);
+        if !main_visible {
+            let _ = app.hide();
+        }
+    }
+    Ok(())
+}
+
+// Hand a finished quick translation to the main window: `show` puts it on
+// screen there, otherwise it only goes into history (the main window owns it).
+#[tauri::command]
+fn quick_result(app: AppHandle, payload: String, show: bool) -> Result<(), String> {
+    let value: Value = serde_json::from_str(&payload)
+        .map_err(|error| format!("Failed to decode quick result: {error}"))?;
+    let window = main_window(&app)?;
+    let function = if show { "__translatorShowResult" } else { "__translatorQuickResult" };
+    window
+        .eval(&format!("window.{function} && window.{function}({value})"))
+        .map_err(|error| format!("Failed to pass quick result: {error}"))?;
+    if show {
+        if let Some(quick) = app.get_webview_window(QUICK_WINDOW_LABEL) {
+            let _ = quick.hide();
+        }
+        show_main_window(&app)?;
+    }
+    Ok(())
 }
 
 fn flush_pending_clipboard_triggers(app: &AppHandle) {
@@ -1274,10 +1426,14 @@ fn main() {
             hotkey_starting: AtomicBool::new(false),
             frontend_ready: AtomicBool::new(false),
             pending_clipboard_triggers: AtomicU64::new(0),
+            quick_ready: AtomicBool::new(false),
         })
         .setup(|app| {
             startup_log("setup_start", None);
             build_tray(&app.handle())?;
+            if let Err(error) = create_quick_window(&app.handle()) {
+                eprintln!("main: {error}");
+            }
             match main_window(&app.handle()) {
                 Ok(_) => startup_log("window_ready", Some("label=main")),
                 Err(error) => {
@@ -1319,6 +1475,11 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == QUICK_WINDOW_LABEL {
+                    api.prevent_close();
+                    let _ = hide_quick_window(window.app_handle().clone(), true);
+                    return;
+                }
                 if window.label() != "main" {
                     return;
                 }
@@ -1363,7 +1524,10 @@ fn main() {
             check_input_monitoring,
             request_input_monitoring,
             open_privacy_settings,
-            frontend_ready
+            frontend_ready,
+            quick_frontend_ready,
+            hide_quick_window,
+            quick_result
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

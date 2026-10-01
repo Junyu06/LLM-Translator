@@ -1,0 +1,172 @@
+import { useEffect, useRef, useState } from "react";
+
+import { languageName, translator } from "../i18n";
+import { IconCopy, IconExpand, IconX } from "../icons";
+import { getConfig, hideQuickWindow, passQuickResult, quickFrontendReady, readClipboard, translate, writeClipboardText } from "../lib/api";
+import { defaultConfig, requestFor } from "../lib/defaults";
+import type { AppConfig, QuickResult } from "../types";
+import TranslationView from "./TranslationView";
+import "../styles.css";
+
+type Phase = "idle" | "reading" | "translating" | "done" | "error";
+
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+// The small window that copying twice opens next to the pointer: the
+// translation only, with copy, open in the main window, and Esc to go back.
+export default function QuickView() {
+  const [config, setConfig] = useState<AppConfig>(defaultConfig);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [message, setMessage] = useState("");
+  const [result, setResult] = useState<QuickResult | null>(null);
+  const [copied, setCopied] = useState(false);
+  const runRef = useRef(0);
+  const shownAtRef = useRef(0);
+  const t = translator(config.ui_lang);
+
+  const run = async () => {
+    const id = runRef.current + 1;
+    runRef.current = id;
+    shownAtRef.current = Date.now();
+    setPhase("reading");
+    setResult(null);
+    setMessage("");
+    setCopied(false);
+
+    let current = defaultConfig;
+    try {
+      current = { ...defaultConfig, ...(await getConfig()) };
+    } catch (error) {
+      console.error(error);
+    }
+    if (runRef.current !== id) return;
+    setConfig(current);
+    document.body.setAttribute("data-theme", current.theme || "system");
+    const tr = translator(current.ui_lang);
+
+    // Right after a double copy the source app may still be writing the clipboard.
+    let text = "";
+    let source: "text" | "image" | "empty" = "empty";
+    for (let attempt = 0; attempt < 3 && source === "empty"; attempt += 1) {
+      if (attempt > 0) await sleep(80);
+      try {
+        const capture = await readClipboard();
+        source = capture.source;
+        text = capture.text;
+      } catch (error) {
+        if (runRef.current !== id) return;
+        setPhase("error");
+        setMessage(`${tr("clipboard_error")}: ${errorText(error)}`);
+        return;
+      }
+    }
+    if (runRef.current !== id) return;
+    if (!text.trim()) {
+      setPhase("error");
+      setMessage(source === "image" ? tr("ocr_no_text") : tr("clipboard_empty"));
+      return;
+    }
+
+    setPhase("translating");
+    setResult({ source: text, output: "", segments: [], detected_source_lang: null });
+    try {
+      const response = await translate(requestFor(text, current));
+      if (runRef.current !== id) return;
+      const finished: QuickResult = {
+        source: text,
+        output: response.output_text,
+        segments: response.segments.map((segment) => ({ ...segment, done: true })),
+        detected_source_lang: response.detected_source_lang
+      };
+      setResult(finished);
+      setPhase("done");
+      void passQuickResult(finished, false).catch((error) => console.error(error));
+    } catch (error) {
+      if (runRef.current !== id) return;
+      setPhase("error");
+      setMessage(errorText(error));
+    }
+  };
+
+  const close = () => void hideQuickWindow(true);
+
+  const copy = async () => {
+    if (!result?.output) return;
+    try {
+      await writeClipboardText(result.output);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch (error) {
+      setMessage(errorText(error));
+    }
+  };
+
+  const openInMain = () => {
+    if (result && phase === "done") void passQuickResult(result, true).catch((error) => setMessage(errorText(error)));
+  };
+
+  // Handlers change every render; the window-level listeners below read the latest ones.
+  const handlersRef = useRef({ run, close, openInMain });
+  handlersRef.current = { run, close, openInMain };
+
+  useEffect(() => {
+    (globalThis as any).__translatorQuickTranslate = () => void handlersRef.current.run();
+    void quickFrontendReady().catch((error) => console.error(error));
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") handlersRef.current.close();
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") handlersRef.current.openInMain();
+    };
+    // Clicking another app dismisses the window, but not in the moment it is being shown.
+    const onBlur = () => {
+      if (Date.now() - shownAtRef.current > 600) void hideQuickWindow(false);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      delete (globalThis as any).__translatorQuickTranslate;
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+
+  const lang = (code: string) => languageName(config.ui_lang, code);
+  const from = result?.detected_source_lang ?? (config.source_lang === "auto" ? null : config.source_lang);
+  const route = `${from ? lang(from) : lang("auto")} → ${lang(config.target_lang)}`;
+  const busy = phase === "reading" || phase === "translating";
+
+  return (
+    <div className="quick" style={{ fontSize: `${config.font_size}px` }}>
+      <header className="quick-bar">
+        <span className="panel-label">{route}</span>
+        <div className="row-actions">
+          <button className="icon-btn" onClick={() => void copy()} disabled={phase !== "done"} title={t(copied ? "copied" : "copy")}><IconCopy /></button>
+          <button className="icon-btn" onClick={openInMain} disabled={phase !== "done"} title={t("open_in_main")}><IconExpand /></button>
+          <button className="icon-btn" onClick={close} title={t("close")}><IconX /></button>
+        </div>
+      </header>
+      <div className="quick-body">
+        {phase === "error" ? (
+          <p className="quick-message status-error">{message}</p>
+        ) : phase === "reading" ? (
+          <p className="quick-message">{t("reading_clipboard")}</p>
+        ) : (
+          <TranslationView
+            t={t}
+            segments={result?.segments ?? []}
+            outputText={result?.output ?? ""}
+            bilingual={false}
+            markdown={config.translation_mode === "markdown"}
+            running={busy}
+            retranslating={new Set()}
+            actions={false}
+            onCopy={() => {}}
+            onRetranslate={() => {}}
+            emptyHint=""
+          />
+        )}
+      </div>
+      {copied && <div className="quick-toast">{t("copied")}</div>}
+    </div>
+  );
+}

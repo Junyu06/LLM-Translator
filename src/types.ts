@@ -26,6 +26,16 @@ export type AppConfig = {
   glossary: string;
   prompt_style: PromptStyle;
   custom_prompt: string;
+  // Copying twice shows the result in a small window instead of the main one.
+  quick_window: boolean;
+};
+
+// A finished translation from the quick window, handed to the main window.
+export type QuickResult = {
+  source: string;
+  output: string;
+  segments: TranslationSegment[];
+  detected_source_lang: string | null;
 };
 
 export type PromptStyle = "auto" | "index" | "hy" | "generic" | "custom";

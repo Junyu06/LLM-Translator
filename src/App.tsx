@@ -29,8 +29,9 @@ import {
   translate,
   writeClipboardText
 } from "./lib/api";
+import { defaultConfig, requestFor } from "./lib/defaults";
 import { addHistoryItem, loadHistory, readStorage, saveHistory, writeStorage } from "./lib/history";
-import type { AppConfig, HistoryItem, TranslationEvent, TranslationRequest, TranslationSegment } from "./types";
+import type { AppConfig, HistoryItem, QuickResult, TranslationEvent, TranslationSegment } from "./types";
 import "./styles.css";
 
 declare const __BUILD_PLATFORM__: "windows" | "macos" | "linux";
@@ -42,25 +43,7 @@ const DOUBLE_COPY_SHORTCUT = IS_MAC_BUILD ? "⌘C ⌘C" : "Ctrl+C Ctrl+C";
 const PERMISSION_AUTO_REQUEST_KEY = "translator_permission_autorequest_v1";
 const POLL_INTERVAL_MS = 120;
 
-const defaultConfig: AppConfig = {
-  source_lang: "auto",
-  target_lang: "zh",
-  collapse_newlines: false,
-  output_mode: "translations_only",
-  translation_mode: "normal",
-  layout: "vertical",
-  mode: "local",
-  host: "http://127.0.0.1:11434",
-  model: "demonbyron/HY-MT1.5-1.8B",
-  font_size: 14,
-  hotkey_enabled: true,
-  minimize_to_tray: true,
-  theme: "system",
-  ui_lang: "en",
-  glossary: "",
-  prompt_style: "auto",
-  custom_prompt: ""
-};
+
 
 type Status = { text: string; tone: "idle" | "busy" | "error" };
 
@@ -101,6 +84,7 @@ export default function App() {
   const statusTimerRef = useRef<number | null>(null);
   const permissionPollRef = useRef<number | null>(null);
   const captureRef = useRef<() => Promise<void>>(async () => {});
+  const showResultRef = useRef<(result: QuickResult) => void>(() => {});
   const navRef = useRef<HTMLElement>(null);
   const segmentsRef = useRef<TranslationSegment[]>([]);
   // The text the shown translation belongs to (the box may have been edited since).
@@ -188,22 +172,6 @@ export default function App() {
       await sleep(POLL_INTERVAL_MS);
     }
   };
-
-  const requestFor = (text: string, current: AppConfig): TranslationRequest => ({
-    text,
-    source_lang: current.source_lang,
-    target_lang: current.target_lang,
-    collapse_newlines: current.collapse_newlines,
-    // Side-by-side is drawn from segments, so switching views never needs a new request.
-    output_mode: "translations_only",
-    translation_mode: current.translation_mode,
-    mode: current.mode,
-    host: current.host,
-    model: current.model,
-    glossary: current.glossary,
-    prompt_style: current.prompt_style,
-    custom_prompt: current.custom_prompt
-  });
 
   // Anything that replaces the shown text drops per-paragraph state and late re-translations.
   const resetView = () => {
@@ -471,6 +439,33 @@ export default function App() {
     };
     return () => {
       delete (globalThis as any).__translatorTriggerClipboardTranslation;
+    };
+  }, []);
+
+  // The quick window hands its results here: every finished one goes into
+  // history (this window owns it), and "open here" also shows it.
+  showResultRef.current = (result: QuickResult) => {
+    runIdRef.current += 1;
+    stopCurrentJob();
+    setRunning(false);
+    shownSourceRef.current = result.source;
+    setInput(result.source);
+    setSegments(result.segments);
+    setOutput(result.output);
+    setDetectedLang(result.detected_source_lang);
+    resetView();
+    showStatus("");
+  };
+  useEffect(() => {
+    const store = (result: QuickResult) => setHistory((prev) => addHistoryItem(prev, result.source, result.output, result.segments));
+    (globalThis as any).__translatorQuickResult = store;
+    (globalThis as any).__translatorShowResult = (result: QuickResult) => {
+      store(result);
+      showResultRef.current(result);
+    };
+    return () => {
+      delete (globalThis as any).__translatorQuickResult;
+      delete (globalThis as any).__translatorShowResult;
     };
   }, []);
 

@@ -67,7 +67,7 @@ impl MacHotkeyListener {
                             *guard = None;
                             eprintln!("hotkey_macos: double Cmd+C detected");
                             eprintln!("hotkey_macos: requesting clipboard translation via Rust bridge");
-                            if let Err(error) = crate::emit_clipboard_translation_request(&app_callback) {
+                            if let Err(error) = crate::handle_double_copy(&app_callback) {
                                 eprintln!(
                                     "hotkey_macos: failed to request clipboard translation: {error}"
                                 );

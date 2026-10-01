@@ -1,4 +1,4 @@
-import type { AppConfig, TranslationRequest, TranslationResponse } from "../types";
+import type { AppConfig, QuickResult, TranslationRequest, TranslationResponse } from "../types";
 
 const API_BASE = "http://127.0.0.1:8765";
 
@@ -293,4 +293,32 @@ export async function loadInitialConfig(): Promise<{
     config,
     desktopStatus: null
   };
+}
+
+// ---------- quick window ----------
+
+export async function quickFrontendReady(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("quick_frontend_ready");
+}
+
+// `returnFocus`: hand focus back to the app the text came from (Esc, close).
+export async function hideQuickWindow(returnFocus: boolean): Promise<void> {
+  if (!isTauriRuntime()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("hide_quick_window", { returnFocus });
+}
+
+// Every finished quick translation goes to the main window's history; `show` also opens it there.
+export async function passQuickResult(result: QuickResult, show: boolean): Promise<void> {
+  if (!isTauriRuntime()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("quick_result", { payload: JSON.stringify(result), show });
+}
+
+export function isQuickWindow(): boolean {
+  if (typeof window === "undefined") return false;
+  const label = (window as any).__TAURI_INTERNALS__?.metadata?.currentWindow?.label;
+  return label === "quick" || new URLSearchParams(window.location.search).get("view") === "quick";
 }

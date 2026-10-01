@@ -17,6 +17,8 @@ type Props = {
   running: boolean;
   // Paragraphs being translated again on their own.
   retranslating: Set<number>;
+  // Per-paragraph buttons; off in the quick window.
+  actions?: boolean;
   onCopy: (index: number) => void;
   onRetranslate: (index: number) => void;
   emptyHint: string;
@@ -55,7 +57,7 @@ const Actions = ({ t, index, busy, showingSource, onToggleSource, onCopy, onRetr
 );
 
 export default function TranslationView(props: Props) {
-  const { t, segments, outputText, bilingual, markdown, running, retranslating, onCopy, onRetranslate, emptyHint } = props;
+  const { t, segments, outputText, bilingual, markdown, running, retranslating, onCopy, onRetranslate, emptyHint, actions = true } = props;
   // Paragraphs whose original is shown inline in the translation-only view.
   const [openSources, setOpenSources] = useState<Set<number>>(new Set());
   const toggleSource = (index: number) =>
@@ -74,7 +76,7 @@ export default function TranslationView(props: Props) {
   }
 
   // A finished paragraph can be copied or translated again, unless the whole text is still running.
-  const actionable = (segment: TranslationSegment) => !running && segment.done && segment.target !== segment.source;
+  const actionable = (segment: TranslationSegment) => actions && !running && segment.done && segment.target !== segment.source;
 
   if (bilingual) {
     return (

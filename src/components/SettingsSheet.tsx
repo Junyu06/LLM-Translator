@@ -200,6 +200,13 @@ export default function SettingsSheet(props: Props) {
               </div>
               <Toggle checked={config.hotkey_enabled} onChange={(value) => update({ hotkey_enabled: value })} label={t("hotkey")} />
             </div>
+            <div className="settings-row">
+              <div className="settings-info">
+                <div className="settings-name">{t("quick_window")}</div>
+                <div className="settings-desc">{t("quick_window_desc")}</div>
+              </div>
+              <Toggle checked={config.quick_window} onChange={(value) => update({ quick_window: value })} label={t("quick_window")} />
+            </div>
             {props.isMac && permissionRow("accessibility", props.permissions.accessibility, "accessibility")}
             {props.isMac && permissionRow("input_monitoring", props.permissions.inputMonitoring, "input_monitoring")}
           </section>
