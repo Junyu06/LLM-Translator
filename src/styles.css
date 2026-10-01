@@ -123,9 +123,6 @@ button { font-family: inherit; }
 .reading .para + .para { margin-top: 0.3em; }
 .reading .group + .group { margin-top: 1.15em; }
 .para-source { color: var(--fg-muted); font-size: 0.9em; line-height: 1.6; margin-bottom: 0.25em; }
-.markdown-blocks .para, .markdown-blocks .block { white-space: normal; }
-.markdown-blocks .block + .block { margin-top: 0.8em; }
-.markdown-blocks .para-source .markdown-body { white-space: normal; }
 
 .bilingual .pair + .pair { margin-top: 1.4em; }
 .pair-source { color: var(--fg-muted); font-size: 0.9em; line-height: 1.6; white-space: pre-wrap; }

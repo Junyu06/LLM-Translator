@@ -1591,6 +1591,14 @@ fn main() {
         } => {
             let _ = show_main_window(_app);
         }
+        // Every way out (Cmd+Q, the app menu, the tray, closing the window)
+        // ends the bridge processes this app started.
+        tauri::RunEvent::Exit => {
+            let state = _app.state::<AppState>();
+            stop_hotkey_listener(&state);
+            let _ = cancel_running_translation(_app, &state, None, false);
+            kill_bridge_processes(&state);
+        }
         _ => {}
     });
 }

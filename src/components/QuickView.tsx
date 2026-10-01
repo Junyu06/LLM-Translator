@@ -117,9 +117,19 @@ export default function QuickView() {
       if (event.key === "Escape") handlersRef.current.close();
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") handlersRef.current.openInMain();
     };
-    // Clicking another app dismisses the window, but not in the moment it is being shown.
+    // Clicking another app dismisses the window. A blur in the moment the
+    // window is being shown is checked again once it has settled.
+    let recheck: number | undefined;
     const onBlur = () => {
-      if (Date.now() - shownAtRef.current > 600) void hideQuickWindow(false);
+      const settling = 600 - (Date.now() - shownAtRef.current);
+      if (settling <= 0) {
+        void hideQuickWindow(false);
+        return;
+      }
+      window.clearTimeout(recheck);
+      recheck = window.setTimeout(() => {
+        if (!document.hasFocus()) void hideQuickWindow(false);
+      }, settling);
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("blur", onBlur);
@@ -127,6 +137,7 @@ export default function QuickView() {
       delete (globalThis as any).__translatorQuickTranslate;
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("blur", onBlur);
+      window.clearTimeout(recheck);
     };
   }, []);
 

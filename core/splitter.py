@@ -242,8 +242,12 @@ _DEFINITION_RE = re.compile(
 )
 # [text][label], [text][] and [text]; not the label half of another link, and
 # not an inline link or a definition.
-_REFERENCE_LINK_RE = re.compile(r"(?<![\]\\])\[(?P<text>(?:[^\[\]\\]|\\.)+)\](?:\[(?P<label>[^\[\]]*)\])?(?![(:\[])")
-_CODE_SPAN_RE = re.compile(r"(`+).+?\1", re.DOTALL)
+# Link text may hold one level of brackets: [the **[docs]**][site].
+_REFERENCE_LINK_RE = re.compile(
+    r"(?<![\]\\])\[(?P<text>(?:[^\[\]\\]|\\.|\[(?:[^\[\]\\]|\\.)*\])+)\](?:\[(?P<label>[^\[\]]*)\])?(?![(:\[])"
+)
+# Left as they are: code spans, inline link destinations, autolinks, bare URLs.
+_KEEP_RE = re.compile(r"(`+).+?\1|\]\([^)\n]*\)|<[^>\s]+>|https?://[^\s<>]+", re.DOTALL)
 
 
 def _link_targets(segments: List[Segment], references: Dict[str, dict]) -> Dict[str, str]:
@@ -285,10 +289,10 @@ def _inline_reference_links(segments: List[Segment], references: Dict[str, dict]
 
     def rewrite(text: str) -> str:
         parts, last = [], 0
-        for code in _CODE_SPAN_RE.finditer(text):
-            parts.append(_REFERENCE_LINK_RE.sub(inline, text[last:code.start()]))
-            parts.append(code.group(0))
-            last = code.end()
+        for kept in _KEEP_RE.finditer(text):
+            parts.append(_REFERENCE_LINK_RE.sub(inline, text[last:kept.start()]))
+            parts.append(kept.group(0))
+            last = kept.end()
         parts.append(_REFERENCE_LINK_RE.sub(inline, text[last:]))
         return "".join(parts)
 

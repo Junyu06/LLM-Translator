@@ -171,6 +171,19 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         segments = split_markdown_blocks('See [a][x].\n\n[x]:\n  https://example.com\n  "say \\"hi\\" \\\\"')
         self.assertEqual(segments[0].text, 'See [a](<https://example.com> "say \\"hi\\" \\\\").')
 
+    def test_urls_and_link_destinations_are_not_rewritten(self):
+        segments = split_markdown_blocks(
+            "[search](https://example.com/?tag=[site]) <https://a.b/[site]> https://c.d/[site] and [site].\n\n[site]:\n  https://example.com/s"
+        )
+        self.assertEqual(
+            segments[0].text,
+            "[search](https://example.com/?tag=[site]) <https://a.b/[site]> https://c.d/[site] and [site](<https://example.com/s>).",
+        )
+
+    def test_link_text_with_brackets_is_rewritten(self):
+        segments = split_markdown_blocks("See [the **[docs]**][site].\n\n[site]: https://example.com")
+        self.assertEqual(segments[0].text, "See [the **[docs]**](https://example.com).")
+
     def test_setext_heading_is_one_block(self):
         self.assertEqual(kinds("Title\n=====\n\nText."), [("heading", False), ("text", False)])
 
