@@ -1097,9 +1097,17 @@ fn translate(app: AppHandle, payload: String) -> Result<String, String> {
     run_bridge(&app, "translate", Some(&payload))
 }
 
+// Bridge calls that can wait on the network or OCR run on a blocking thread:
+// synchronous Tauri commands run on the main thread and would freeze the window.
+async fn run_bridge_off_main(app: AppHandle, command: &'static str, input: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || run_bridge(&app, command, input.as_deref()))
+        .await
+        .map_err(|error| format!("Bridge task failed: {error}"))?
+}
+
 #[tauri::command]
-fn list_models(app: AppHandle, payload: String) -> Result<String, String> {
-    run_bridge(&app, "list-models", Some(&payload))
+async fn list_models(app: AppHandle, payload: String) -> Result<String, String> {
+    run_bridge_off_main(app, "list-models", Some(payload)).await
 }
 
 #[tauri::command]
@@ -1154,8 +1162,8 @@ fn write_clipboard_text(payload: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn read_clipboard(app: AppHandle) -> Result<String, String> {
-    run_bridge(&app, "read-clipboard", None)
+async fn read_clipboard(app: AppHandle) -> Result<String, String> {
+    run_bridge_off_main(app, "read-clipboard", None).await
 }
 
 #[cfg(target_os = "macos")]

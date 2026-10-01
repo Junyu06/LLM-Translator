@@ -56,11 +56,8 @@ class TranslationService:
             raise ValueError("Nothing to translate.")
 
         markdown = request.translation_mode == "markdown"
-        segments = (
-            split_markdown_blocks(text)
-            if markdown
-            else split_long_segments(self._trim_blank_edges(split_paragraphs(text)), LONG_PARAGRAPH_TOKENS)
-        )
+        blocks = split_markdown_blocks(text) if markdown else self._trim_blank_edges(split_paragraphs(text))
+        segments = split_long_segments(blocks, LONG_PARAGRAPH_TOKENS)
         self._validate_request_budget(request, text, segments)
 
         detected = self._detect_source_lang(text) if request.source_lang == "auto" else request.source_lang

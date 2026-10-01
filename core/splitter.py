@@ -7,7 +7,8 @@ keeps the original spacing.
 
 Markdown mode: one unit per Markdown block (heading, paragraph, list,
 blockquote, table). Code, quotes that contain code, and reference link
-definitions are protected from translation.
+definitions are protected from translation; reference links are rewritten
+as inline links so every block renders on its own.
 """
 
 from __future__ import annotations
@@ -107,7 +108,7 @@ def split_paragraphs(text: str) -> List[Segment]:
 _FENCE_RE = re.compile(r"^(?P<indent> {0,3})(?P<fence>`{3,}|~{3,})")
 _LIST_MARKER_RE = re.compile(r"^ {0,3}(?:[-+*]\s+\S|\d+[.)]\s+\S)")
 _HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
-_LINK_DEFINITION_RE = re.compile(r"^ {0,3}\[[^\]]+\]:\s*\S")
+_DEFINITION_START_RE = re.compile(r"^ {0,3}\[[^\]]+\]:[ \t]*$")
 
 
 def _is_blank(line: str) -> bool:
@@ -134,6 +135,19 @@ def _is_any_fence(line: str) -> bool:
     """A code fence at any indentation, including one nested in a list item."""
     stripped = line.lstrip()
     return stripped.startswith("```") or stripped.startswith("~~~")
+
+
+def _quote_contains_code(block: List[str]) -> bool:
+    """Fenced or indented code anywhere inside a (possibly nested) blockquote."""
+    for line in block:
+        content = line
+        while content.lstrip().startswith(">"):
+            content = content.lstrip()[1:]
+            if content.startswith(" "):
+                content = content[1:]
+        if _is_any_fence(content) or (_is_indented(content) and content.strip()):
+            return True
+    return False
 
 
 def _is_table_separator(line: str) -> bool:
@@ -320,7 +334,7 @@ def split_markdown_blocks(text: str) -> List[Segment]:
             block, index = _take_blockquote(lines, index)
             kind = "blockquote"
             # A quote that contains code is kept whole; splitting it would break the quote.
-            if any(_is_any_fence(item.lstrip().lstrip(">")) for item in block):
+            if _quote_contains_code(block):
                 protected = True
         elif _is_list_marker(line):
             block, index = _take_list(lines, index)
@@ -329,38 +343,79 @@ def split_markdown_blocks(text: str) -> List[Segment]:
             block, index = _take_text(lines, index)
             kind = "text"
             # Reference link definitions carry URLs, not prose.
-            if all(_LINK_DEFINITION_RE.match(item) for item in block):
+            if _is_definition_block(block):
                 protected, kind = True, "link_definitions"
 
         segments.append(Segment(text="\n".join(block), protected=protected, kind=kind))
 
-    return _expand_reference_shortcuts(segments)
+    return _inline_reference_links(segments)
 
 
-_SHORTCUT_REF_RE = re.compile(r"(?<![\]\\])\[([^\[\]]+)\](\[\])?(?![(\[:])")
+_DEFINITION_RE = re.compile(
+    r"""^ {0,3}\[(?P<label>[^\]]+)\]:[ \t]*(?P<url><[^>\n]*>|\S+)(?:[ \t]+(?P<title>"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$"""
+)
+# [text][label], [text][] and [text]; not the label half of another link, and
+# not an inline link or a definition.
+_REFERENCE_LINK_RE = re.compile(r"(?<![\]\\])\[(?P<text>(?:[^\[\]\\]|\\.)+)\](?:\[(?P<label>[^\[\]]*)\])?(?![(:\[])")
+_CODE_SPAN_RE = re.compile(r"(`+).+?\1", re.DOTALL)
 
 
-def _expand_reference_shortcuts(segments: List[Segment]) -> List[Segment]:
-    """Write `[the docs]` and `[the docs][]` as `[the docs][the docs]`.
+def _is_definition_block(block: List[str]) -> bool:
+    """Every line is a one-line definition, or a definition whose URL and title
+    follow on indented lines."""
+    if not block:
+        return False
+    after_start = False
+    for line in block:
+        if _DEFINITION_RE.match(line):
+            after_start = False
+        elif _DEFINITION_START_RE.match(line):
+            after_start = True
+        elif not (after_start and line[:1].isspace() and line.strip()):
+            return False
+    return True
 
-    In the short forms the link text is also the label, so translating the text
-    would break the link. The full form renders the same and lets the label be
-    restored after translation.
+
+def _normalize_label(label: str) -> str:
+    return " ".join(label.split()).lower()
+
+
+def _inline_reference_links(segments: List[Segment]) -> List[Segment]:
+    """Rewrite reference links as inline links: `[the docs][site]` -> `[the docs](https://...)`.
+
+    A reference link only works with its definition, which lives in another
+    block, and its label is easy for a model to translate. As an inline link
+    each block carries its own URL and renders on its own. Code spans are left
+    alone; definitions spread over several lines are not rewritten.
     """
-    labels = {
-        match.group(1).strip().lower()
-        for segment in segments
-        if segment.kind == "link_definitions"
-        for match in re.finditer(r"^ {0,3}\[([^\]]+)\]:", segment.text, re.MULTILINE)
-    }
-    if not labels:
+    targets = {}
+    for segment in segments:
+        if segment.kind != "link_definitions":
+            continue
+        for line in segment.text.splitlines():
+            match = _DEFINITION_RE.match(line)
+            if match:
+                url = match.group("url").strip("<>")
+                title = f" {match.group('title')}" if match.group("title") else ""
+                targets.setdefault(_normalize_label(match.group("label")), f"{url}{title}")
+    if not targets:
         return segments
 
-    def expand(match: re.Match) -> str:
-        label = match.group(1)
-        return f"[{label}][{label}]" if label.strip().lower() in labels else match.group(0)
+    def inline(match: re.Match) -> str:
+        label = match.group("label")
+        target = targets.get(_normalize_label(label if label else match.group("text")))
+        return f"[{match.group('text')}]({target})" if target else match.group(0)
+
+    def rewrite(text: str) -> str:
+        parts, last = [], 0
+        for code in _CODE_SPAN_RE.finditer(text):
+            parts.append(_REFERENCE_LINK_RE.sub(inline, text[last:code.start()]))
+            parts.append(code.group(0))
+            last = code.end()
+        parts.append(_REFERENCE_LINK_RE.sub(inline, text[last:]))
+        return "".join(parts)
 
     for segment in segments:
         if segment.translatable:
-            segment.text = _SHORTCUT_REF_RE.sub(expand, segment.text)
+            segment.text = rewrite(segment.text)
     return segments

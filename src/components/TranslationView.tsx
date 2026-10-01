@@ -11,28 +11,13 @@ type Props = {
   emptyHint: string;
 };
 
-const LINK_DEFINITION_LINE = /^ {0,3}\[[^\]]+\]:\s*\S/;
-
-// Only blocks made entirely of definitions count, so a definition shown inside
-// a code example does not turn text elsewhere into a link.
-const isDefinitionBlock = (text: string) => {
-  const lines = text.split("\n").filter((line) => line.trim());
-  return lines.length > 0 && lines.every((line) => LINK_DEFINITION_LINE.test(line));
-};
-
-// Each block is rendered on its own, so reference links (`[text][name]`) get
-// the whole document's definitions appended; definitions render nothing.
-const Prose = ({ text, markdown, links = "" }: { text: string; markdown: boolean; links?: string }) =>
-  markdown
-    ? <div className="markdown-body"><ReactMarkdown>{links ? `${text}\n\n${links}` : text}</ReactMarkdown></div>
-    : <>{text}</>;
+const Prose = ({ text, markdown }: { text: string; markdown: boolean }) =>
+  markdown ? <div className="markdown-body"><ReactMarkdown>{text}</ReactMarkdown></div> : <>{text}</>;
 
 // A paragraph still waiting for its translation.
 const Pending = () => <span className="pending" aria-hidden="true" />;
 
 export default function TranslationView({ segments, outputText, bilingual, markdown, running, emptyHint }: Props) {
-  const links = markdown ? segments.filter((segment) => isDefinitionBlock(segment.source)).map((segment) => segment.source).join("\n") : "";
-
   if (segments.length === 0) {
     if (outputText) {
       return <div className="translation"><div className="paragraph"><Prose text={outputText} markdown={markdown} /></div></div>;
@@ -47,13 +32,13 @@ export default function TranslationView({ segments, outputText, bilingual, markd
           !segment.source.trim() ? null : segment.done && segment.target === segment.source ? (
             // Code and other kept-as-is blocks appear once.
             <section key={index} className="pair">
-              <Prose text={segment.source} markdown={markdown} links={links} />
+              <Prose text={segment.source} markdown={markdown} />
             </section>
           ) : (
             <section key={index} className="pair">
-              <div className="pair-source"><Prose text={segment.source} markdown={markdown} links={links} /></div>
+              <div className="pair-source"><Prose text={segment.source} markdown={markdown} /></div>
               <div className="pair-target">
-                {segment.target ? <Prose text={segment.target} markdown={markdown} links={links} /> : running && <Pending />}
+                {segment.target ? <Prose text={segment.target} markdown={markdown} /> : running && <Pending />}
               </div>
             </section>
           )
@@ -62,7 +47,24 @@ export default function TranslationView({ segments, outputText, bilingual, markd
     );
   }
 
-  // Translation only. Code and other passthrough blocks keep their place.
+  // Translation only, Markdown: one document, so anything that spans blocks
+  // (reference definitions, list numbering) renders as in the source.
+  if (markdown) {
+    // Show blocks in order up to the first one still waiting, so a code block
+    // (kept as-is from the start) does not jump ahead of untranslated text.
+    const firstWaiting = segments.findIndex((segment) => segment.source.trim() && !segment.target);
+    const shown = firstWaiting === -1 ? segments : segments.slice(0, firstWaiting);
+    const done = shown.map((segment) => segment.target).filter(Boolean).join("\n\n");
+    const waiting = running && firstWaiting !== -1;
+    return (
+      <div className="translation">
+        {done && <Prose text={done} markdown />}
+        {waiting && <Pending />}
+      </div>
+    );
+  }
+
+  // Translation only. Blank lines keep their place.
   const firstPending = segments.findIndex((segment) => segment.source.trim() && !segment.target);
   return (
     <div className="translation">
@@ -71,7 +73,7 @@ export default function TranslationView({ segments, outputText, bilingual, markd
         if (!segment.target) return running && index === firstPending ? <Pending key={index} /> : null;
         return (
           <div key={index} className="paragraph">
-            <Prose text={segment.target} markdown={markdown} links={links} />
+            <Prose text={segment.target} markdown={markdown} />
           </div>
         );
       })}

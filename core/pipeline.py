@@ -95,7 +95,8 @@ def split_long_segments(segments: List[Segment], max_tokens: int) -> List[Segmen
 
     A paragraph whose source and translation together exceed Ollama's default
     context would be silently truncated, so it is translated in parts, each
-    shown as its own pair.
+    shown as its own pair. Only plain paragraphs are cut; a Markdown paragraph's
+    soft line breaks become spaces, which renders the same.
     """
     result: List[Segment] = []
     for segment in segments:

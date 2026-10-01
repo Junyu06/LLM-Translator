@@ -328,13 +328,18 @@ export default function App() {
     void saveConfig(patch).catch((error) => console.error(error));
   };
 
+  // Only the newest request may fill the list, so switching servers mid-request
+  // never shows the previous server's models.
+  const modelRequestRef = useRef(0);
   const refreshModels = async () => {
+    const request = modelRequestRef.current + 1;
+    modelRequestRef.current = request;
     setModels((prev) => ({ ...prev, loading: true }));
     try {
       const names = await listModels(configRef.current);
-      setModels({ models: names, error: null, loading: false });
+      if (modelRequestRef.current === request) setModels({ models: names, error: null, loading: false });
     } catch (error) {
-      setModels({ models: [], error: errorText(error), loading: false });
+      if (modelRequestRef.current === request) setModels({ models: [], error: errorText(error), loading: false });
     }
   };
 

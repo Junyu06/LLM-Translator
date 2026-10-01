@@ -72,9 +72,37 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         segments = split_markdown_blocks("> Run this:\n> ```bash\n> npm run keep\n> ```")
         self.assertEqual([(s.kind, s.protected) for s in segments], [("blockquote", True)])
 
-    def test_shortcut_and_collapsed_references_get_explicit_labels(self):
-        segments = split_markdown_blocks("See [the docs] and [The Docs][] or [site](https://x.y).\n\n[the docs]: https://example.com")
-        self.assertEqual(segments[0].text, "See [the docs][the docs] and [The Docs][The Docs] or [site](https://x.y).")
+    def test_reference_links_become_inline_links(self):
+        segments = split_markdown_blocks(
+            "See [the docs][site], [Site][] and [site], plus ![logo][img].\n\n"
+            "[site]: https://example.com/docs \"Docs\"\n[img]: <https://example.com/logo.png>"
+        )
+        self.assertEqual(
+            segments[0].text,
+            'See [the docs](https://example.com/docs "Docs"), [Site](https://example.com/docs "Docs") '
+            'and [site](https://example.com/docs "Docs"), plus ![logo](https://example.com/logo.png).',
+        )
+        self.assertEqual((segments[1].kind, segments[1].protected), ("link_definitions", True))
+
+    def test_inline_code_and_inline_links_are_left_alone(self):
+        segments = split_markdown_blocks("Use `[site]` or [x](https://a.b) and [site].\n\n[site]: https://example.com")
+        self.assertEqual(segments[0].text, "Use `[site]` or [x](https://a.b) and [site](https://example.com).")
+
+    def test_multi_line_definition_is_protected(self):
+        segments = split_markdown_blocks("Text.\n\n[site]:\n  https://example.com\n  \"Title\"")
+        self.assertEqual((segments[1].kind, segments[1].protected), ("link_definitions", True))
+
+    def test_nested_quote_with_code_is_kept_whole(self):
+        segments = split_markdown_blocks("> > Example:\n> > ```\n> > keep()\n> > ```")
+        self.assertTrue(segments[0].protected)
+
+    def test_quote_with_indented_code_is_kept_whole(self):
+        segments = split_markdown_blocks('> Example:\n>\n>     print("keep")')
+        self.assertTrue(segments[0].protected)
+
+    def test_plain_quote_is_translated(self):
+        segments = split_markdown_blocks("> Note: the first launch is slow.\n> It gets faster.")
+        self.assertFalse(segments[0].protected)
 
     def test_brackets_without_a_definition_are_left_alone(self):
         segments = split_markdown_blocks("Press [Enter] to continue.")

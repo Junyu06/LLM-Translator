@@ -18,8 +18,6 @@ _QUOTE_PAIRS = {
 }
 
 _THINK_RE = re.compile(r"^\s*<think>.*?</think>\s*", re.DOTALL)
-# The label part of a Markdown reference link: [text][label]
-_REFERENCE_LABEL_RE = re.compile(r"(?<=\]\[)([^\]]*)(?=\])")
 
 
 def strip_reasoning(text: str) -> str:
@@ -38,39 +36,17 @@ def _is_wrapped_in_quotes(text: str) -> bool:
     return len(text) >= 2 and _QUOTE_PAIRS.get(text[0]) == text[-1]
 
 
-def restore_reference_labels(source: str, translation: str) -> str:
-    """Put back reference-link labels the model translated ([文档][网站] -> [文档][site]).
-
-    A label that already matches one in the source is left alone, even if the
-    model reordered the links. A changed label gets the source label at the
-    same position, and only when both texts have the same number of labels.
-    """
-    labels = _REFERENCE_LABEL_RE.findall(source)
-    if not labels or len(_REFERENCE_LABEL_RE.findall(translation)) != len(labels):
-        return translation
-    known = {label.strip().lower() for label in labels}
-    position = iter(range(len(labels)))
-
-    def restore(match: re.Match) -> str:
-        index = next(position)
-        return match.group(1) if match.group(1).strip().lower() in known else labels[index]
-
-    return _REFERENCE_LABEL_RE.sub(restore, translation)
-
-
 def extract_translation(raw: str, source: str = "", *, keep_format: bool = False) -> str:
     """Return the translation without labels, wrapping quotes, or stray blank lines.
 
     Wrapping quotes are removed only when the source was not quoted itself, so
     a translated quotation keeps its quotes. `keep_format` leaves Markdown
-    output untouched apart from surrounding whitespace and reference-link labels.
+    output untouched apart from surrounding whitespace.
     """
     if not raw:
         return ""
     text = strip_reasoning(raw).strip()
-    if keep_format:
-        return restore_reference_labels(source, text)
-    if not text:
+    if keep_format or not text:
         return text
 
     text = _strip_leading_label(text)

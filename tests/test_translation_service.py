@@ -99,6 +99,15 @@ class TranslationServiceTests(unittest.TestCase):
         self.assertEqual(events[-1]["output_text"], "介绍。\n\n- 第一步\n- 第二步\n\n```python\nprint('keep')\n```")
 
     @patch("python_backend.services.translation_service.OllamaBackend")
+    def test_long_markdown_paragraph_is_split_too(self, backend_cls):
+        text = "这是一句很长的测试句子，用来确认 Markdown 模式也会切分。" * 200
+        backend_cls.return_value.stream_chat.side_effect = lambda messages: iter(["译文"])
+        events = list(TranslationService().stream_translate(
+            TranslationRequest(text=text, model="m", translation_mode="markdown")
+        ))
+        self.assertGreater(len(events[-1]["segments"]), 1)
+
+    @patch("python_backend.services.translation_service.OllamaBackend")
     def test_backend_error_ends_the_stream_with_one_error_event(self, backend_cls):
         events, _ = self.run_service(
             backend_cls,
