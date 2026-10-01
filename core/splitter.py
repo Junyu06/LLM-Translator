@@ -269,7 +269,7 @@ def _recording(rule, label_offset: int, disable_nested: bool, url_attr: str):
         token = next((t for t in state.tokens[first_token:] if t.type in ("link_open", "image")), None)
         url = token.attrGet(url_attr) if token else None
         if url is not None:
-            spans.append((start, label_end + 1, end, str(url), str(token.attrGet("title") or "")))
+            spans.append((state.src, start, label_end + 1, end, str(url), str(token.attrGet("title") or "")))
         return ok
 
     return wrapped
@@ -286,8 +286,13 @@ def _inline_destination(url: str, title: str) -> str:
     return f'(<{url}> "{escaped}")'
 
 
-def _content_line_starts(lines: List[str], first: int, content: str) -> List[int | None]:
-    """Where each line of an inline token's content starts in the text, or None if it cannot be placed."""
+def _content_line_starts(lines: List[str], first: int, content: str, cursors: dict) -> List[int | None]:
+    """Where each line of an inline token's content starts in the text, or None if it cannot be placed.
+
+    A paragraph line is the end of its source line (container markers come
+    first). Table cells share a line, so each is looked for after the one
+    before it (`cursors` remembers how far each line has been used).
+    """
     starts: List[int | None] = []
     offset = sum(len(line) + 1 for line in lines[:first])
     for index, content_line in enumerate(content.split("\n")):
@@ -296,12 +301,15 @@ def _content_line_starts(lines: List[str], first: int, content: str) -> List[int
             starts.append(None)
             continue
         line = lines[number]
-        if line.rstrip().endswith(content_line):
-            column = len(line.rstrip()) - len(content_line)
-        elif line.count(content_line) == 1:
-            column = line.index(content_line)
+        from_column = cursors.get(number, 0)
+        suffix = len(line.rstrip()) - len(content_line)
+        if line.rstrip().endswith(content_line) and suffix >= from_column and line.find(content_line, from_column) == suffix:
+            column = suffix
         else:
-            column = None
+            found = line.find(content_line, from_column)
+            column = found if found >= 0 else None
+        if column is not None:
+            cursors[number] = column + len(content_line)
         starts.append(None if column is None else offset + column)
         offset += len(line) + 1
     return starts
@@ -314,6 +322,7 @@ def inline_reference_links(text: str) -> str:
         return text
     lines = text.split("\n")
     edits = []
+    cursors: dict = {}
     for token in tokens:
         if token.type != "inline" or token.map is None:
             continue
@@ -325,16 +334,19 @@ def inline_reference_links(text: str) -> str:
             _recorder.spans = None
         if not spans:
             continue
-        line_starts = _content_line_starts(lines, token.map[0], token.content)
+        line_starts = _content_line_starts(lines, token.map[0], token.content, cursors)
         content_offsets = []
         offset = 0
         for content_line in token.content.split("\n"):
             content_offsets.append(offset)
             offset += len(content_line) + 1
-        for link_start, start, end, url, title in spans:
+        for source, link_start, start, end, url, title in spans:
+            # Image alt text is parsed on its own, with its own positions.
+            if source is not token.content:
+                continue
             # Inside a bare URL the display (GFM autolinks) shows one link; leave it.
             word = re.split(r"\s", token.content[:link_start])[-1]
-            if _BARE_URL_RE.match(word):
+            if _BARE_URL_RE.search(word):
                 continue
             index = max(i for i, value in enumerate(content_offsets) if value <= start)
             if line_starts[index] is None or "\n" in token.content[start:end]:

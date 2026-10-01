@@ -198,6 +198,19 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         only_site = split_markdown_blocks("[the [API [docs]]][site]\n\n[site]: https://target.example")
         self.assertEqual(only_site[0].text, "[the [API [docs]]](<https://target.example>)")
 
+    def test_codex_round_twelve_link_cases(self):
+        defs = "\n\n[site]: /target"
+        self.assertEqual(
+            split_markdown_blocks("https://example.com/path ![x [site]](/image)" + defs)[0].text,
+            "https://example.com/path ![x [site]](/image)",
+        )
+        self.assertEqual(
+            split_markdown_blocks("(https://example.com/(v1)/[site]/manual)" + defs)[0].text,
+            "(https://example.com/(v1)/[site]/manual)",
+        )
+        table = "| [site] | [site] |\n|---|---|\n| a | b |" + defs
+        self.assertEqual(split_markdown_blocks(table)[0].text.splitlines()[0], "| [site](</target>) | [site](</target>) |")
+
     def test_reference_inside_a_list_and_a_quote(self):
         text = "- See [the docs][site]\n  and [site].\n\n> Quote [site].\n\n[site]: https://e.example"
         segments = split_markdown_blocks(text)

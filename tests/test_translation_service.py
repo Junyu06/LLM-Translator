@@ -44,7 +44,10 @@ class TranslationServiceTests(unittest.TestCase):
         self.assertEqual(events[-1]["output_text"], "Hello\nWorld")
         self.assertEqual(
             events[-1]["segments"],
-            [{"source": "你好", "target": "Hello", "done": True}, {"source": "世界", "target": "World", "done": True}],
+            [
+                {"source": "你好", "target": "Hello", "done": True, "kept": False},
+                {"source": "世界", "target": "World", "done": True, "kept": False},
+            ],
         )
 
     @patch("python_backend.services.translation_service.OllamaBackend")
@@ -181,6 +184,24 @@ class TranslationServiceTests(unittest.TestCase):
         self.assertEqual(events[-1]["event"], "completed")
         targets = [segment["target"] for segment in events[-1]["segments"]]
         self.assertEqual(targets[-1], "   然后重启。\n   - 子项\n2. 打开。")
+
+    @patch("python_backend.services.translation_service.OllamaBackend")
+    def test_kept_marks_blocks_shown_as_they_are_not_unchanged_translations(self, backend_cls):
+        events, _ = self.run_service(
+            backend_cls,
+            TranslationRequest(text="Ollama\n\n```\ncode\n```", model="m", translation_mode="markdown"),
+            "Ollama",
+        )
+        self.assertEqual([s["kept"] for s in events[-1]["segments"]], [False, True])
+
+    @patch("python_backend.services.translation_service.OllamaBackend")
+    def test_tab_indented_block_keeps_its_tab(self, backend_cls):
+        events, _ = self.run_service(
+            backend_cls,
+            TranslationRequest(text="\tThen restart.", model="m", translation_mode="markdown", as_block=True),
+            "然后重启。",
+        )
+        self.assertEqual(events[-1]["output_text"], "\t然后重启。")
 
     def test_rejects_empty_input(self):
         with self.assertRaises(ValueError):

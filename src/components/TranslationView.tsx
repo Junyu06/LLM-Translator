@@ -76,7 +76,8 @@ export default function TranslationView(props: Props) {
   }
 
   // A finished paragraph can be copied or translated again, unless the whole text is still running.
-  const actionable = (segment: TranslationSegment) => actions && !running && segment.done && segment.target !== segment.source;
+  const isKept = (segment: TranslationSegment) => segment.kept ?? segment.target === segment.source;
+  const actionable = (segment: TranslationSegment) => actions && !running && segment.done && !isKept(segment);
 
   if (bilingual) {
     return (
@@ -84,7 +85,7 @@ export default function TranslationView(props: Props) {
         {segments.map((segment, index) => {
           if (!segment.source.trim()) return null;
           const busy = retranslating.has(index);
-          if (segment.done && segment.target === segment.source && !busy) {
+          if (segment.done && isKept(segment) && !busy) {
             // Code and other kept-as-is blocks appear once.
             return (
               <section key={index} className="pair">

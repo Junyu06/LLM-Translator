@@ -247,7 +247,7 @@ export default function App() {
     if (!segment || retranslating.has(index)) return;
     const context = all
       .slice(0, index)
-      .filter((pair) => pair.source.trim() && pair.done && pair.target.trim() && pair.target !== pair.source)
+      .filter((pair) => pair.source.trim() && pair.done && pair.target.trim() && !(pair.kept ?? pair.target === pair.source))
       .slice(-3)
       .map(({ source, target }) => ({ source, target }));
     // Each paragraph remembers which request is its latest, so a request that

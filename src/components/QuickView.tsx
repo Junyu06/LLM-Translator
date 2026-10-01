@@ -2,9 +2,21 @@ import { useEffect, useRef, useState } from "react";
 
 import { languageName, translator } from "../i18n";
 import { IconCopy, IconExpand, IconX } from "../icons";
-import { getConfig, hideQuickWindow, passQuickResult, quickFrontendReady, readClipboard, translate, writeClipboardText } from "../lib/api";
+import {
+  cancelTranslation,
+  getConfig,
+  hideQuickWindow,
+  isTauriRuntime,
+  passQuickResult,
+  quickFrontendReady,
+  readClipboard,
+  startTranslationStream,
+  takeTranslationEvents,
+  translate,
+  writeClipboardText
+} from "../lib/api";
 import { defaultConfig, requestFor } from "../lib/defaults";
-import type { AppConfig, QuickResult } from "../types";
+import type { AppConfig, QuickResult, TranslationEvent } from "../types";
 import TranslationView from "./TranslationView";
 import "../styles.css";
 
@@ -22,12 +34,16 @@ export default function QuickView() {
   const [result, setResult] = useState<QuickResult | null>(null);
   const [copied, setCopied] = useState(false);
   const runRef = useRef(0);
+  const jobRef = useRef<number | null>(null);
   const shownAtRef = useRef(0);
   const t = translator(config.ui_lang);
 
   const run = async () => {
     const id = runRef.current + 1;
     runRef.current = id;
+    // A new double copy replaces the translation still running here.
+    if (jobRef.current !== null) void cancelTranslation(jobRef.current);
+    jobRef.current = null;
     shownAtRef.current = Date.now();
     setPhase("reading");
     setResult(null);
@@ -70,22 +86,76 @@ export default function QuickView() {
 
     setPhase("translating");
     setResult({ source: text, output: "", segments: [], detected_source_lang: null });
-    try {
-      const response = await translate(requestFor(text, current));
-      if (runRef.current !== id) return;
-      const finished: QuickResult = {
-        source: text,
-        output: response.output_text,
-        segments: response.segments.map((segment) => ({ ...segment, done: true })),
-        detected_source_lang: response.detected_source_lang
-      };
+    const finish = (finished: QuickResult) => {
       setResult(finished);
       setPhase("done");
       void passQuickResult(finished, false).catch((error) => console.error(error));
-    } catch (error) {
-      if (runRef.current !== id) return;
+    };
+    const fail = (error: string) => {
       setPhase("error");
-      setMessage(errorText(error));
+      setMessage(error);
+    };
+
+    if (!isTauriRuntime()) {
+      try {
+        const response = await translate(requestFor(text, current));
+        if (runRef.current !== id) return;
+        finish({
+          source: text,
+          output: response.output_text,
+          segments: response.segments.map((segment) => ({ ...segment, done: true })),
+          detected_source_lang: response.detected_source_lang
+        });
+      } catch (error) {
+        if (runRef.current === id) fail(errorText(error));
+      }
+      return;
+    }
+
+    // Streamed, so paragraphs appear as they are translated.
+    let jobId: number;
+    try {
+      jobId = await startTranslationStream(requestFor(text, current));
+    } catch (error) {
+      if (runRef.current === id) fail(errorText(error));
+      return;
+    }
+    if (runRef.current !== id) {
+      void cancelTranslation(jobId);
+      return;
+    }
+    jobRef.current = jobId;
+    let latest: QuickResult = { source: text, output: "", segments: [], detected_source_lang: null };
+    while (runRef.current === id) {
+      let events: TranslationEvent[];
+      try {
+        events = await takeTranslationEvents<TranslationEvent>(jobId);
+      } catch (error) {
+        if (runRef.current === id) fail(errorText(error));
+        return;
+      }
+      if (runRef.current !== id) return;
+      for (const event of events) {
+        latest = {
+          source: text,
+          output: event.output_text ?? latest.output,
+          segments: event.segments ?? latest.segments,
+          detected_source_lang: event.detected_source_lang ?? latest.detected_source_lang
+        };
+        if (event.event === "completed") {
+          jobRef.current = null;
+          finish(latest);
+          return;
+        }
+        if (event.event === "error") {
+          jobRef.current = null;
+          fail(event.message ?? "Translation failed");
+          return;
+        }
+        if (event.event === "canceled") return;
+      }
+      setResult(latest);
+      await sleep(120);
     }
   };
 

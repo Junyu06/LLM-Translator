@@ -1,4 +1,6 @@
-export type TranslationSegment = { source: string; target: string; done: boolean };
+// `kept`: shown as it is, never translated (code, blank lines). Older history
+// items lack it; for them a target equal to its source means the same.
+export type TranslationSegment = { source: string; target: string; done: boolean; kept?: boolean };
 
 export type HistoryItem = {
   id: string;
@@ -63,7 +65,7 @@ export type TranslationRequest = {
 export type TranslationResponse = {
   output_text: string;
   detected_source_lang: string | null;
-  segments: Array<{ source: string; target: string }>;
+  segments: Array<{ source: string; target: string; kept?: boolean }>;
 };
 
 // One line of the bridge's translate-stream output, plus events added by the Rust shell.

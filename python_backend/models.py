@@ -145,6 +145,7 @@ class TranslationRequest:
 class SegmentResult:
     source: str
     target: str
+    kept: bool = False
 
 
 @dataclass

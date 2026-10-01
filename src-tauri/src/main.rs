@@ -46,8 +46,10 @@ struct RunningTranslation {
 struct AppState {
     quitting: AtomicBool,
     next_job_id: AtomicU64,
-    canceled_job_id: AtomicU64,
-    translation: Mutex<Option<RunningTranslation>>,
+    canceled_jobs: Mutex<HashSet<u64>>,
+    // One streaming translation per window (by label): a new one replaces
+    // that window's previous job and leaves the other window's alone.
+    translation: Mutex<HashMap<String, RunningTranslation>>,
     translation_events: Mutex<HashMap<u64, Vec<Value>>>,
     hotkey_listener: Mutex<Option<HotkeyListener>>,
     hotkey_status: Mutex<HotkeyStatus>,
@@ -557,7 +559,7 @@ fn release_for_exit(app: &AppHandle) {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         _listener.stop_without_waiting();
     }
-    let _ = cancel_running_translation(app, &state, None, false);
+    let _ = cancel_running_translation(app, &state, None, None, false);
     kill_bridge_processes(&state);
 }
 
@@ -921,29 +923,31 @@ fn build_tray(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// Stops streaming translations: the one with `expected_job_id`, else the one
+// `owner` (a window label) runs, else all of them.
 fn cancel_running_translation(
     _app: &AppHandle,
     state: &AppState,
+    owner: Option<&str>,
     expected_job_id: Option<u64>,
     emit_event: bool,
 ) -> Result<Option<u64>, String> {
-    let running = {
+    let stopped: Vec<RunningTranslation> = {
         let mut guard = state.translation.lock().unwrap();
-        if let Some(current) = guard.as_ref() {
-            if expected_job_id.is_none() || expected_job_id == Some(current.job_id) {
-                guard.take()
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        let keys: Vec<String> = guard
+            .iter()
+            .filter(|(key, running)| match (expected_job_id, owner) {
+                (Some(job_id), _) => running.job_id == job_id,
+                (None, Some(owner)) => key.as_str() == owner,
+                (None, None) => true,
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        keys.iter().filter_map(|key| guard.remove(key)).collect()
     };
 
-    if let Some(running) = running {
-        state
-            .canceled_job_id
-            .store(running.job_id, Ordering::Relaxed);
+    for running in &stopped {
+        state.canceled_jobs.lock().unwrap().insert(running.job_id);
         let mut child = running.child.lock().unwrap();
         let _ = child.kill();
         let _ = child.wait();
@@ -958,11 +962,9 @@ fn cancel_running_translation(
                 }),
             );
         }
-
-        return Ok(Some(running.job_id));
     }
 
-    Ok(None)
+    Ok(stopped.first().map(|running| running.job_id))
 }
 
 fn enqueue_translation_event(state: &AppState, job_id: u64, payload: Value) {
@@ -1070,10 +1072,11 @@ fn spawn_hotkey_listener(app: &AppHandle, state: &AppState) -> Result<(), String
 
 fn spawn_translation_stream(
     app: &AppHandle,
+    owner: &str,
     payload: &str,
     state: &AppState,
 ) -> Result<u64, String> {
-    let _ = cancel_running_translation(app, state, None, false)?;
+    let _ = cancel_running_translation(app, state, Some(owner), None, false)?;
 
     let job_id = state.next_job_id.fetch_add(1, Ordering::Relaxed) + 1;
 
@@ -1122,10 +1125,13 @@ fn spawn_translation_stream(
 
     {
         let mut guard = state.translation.lock().unwrap();
-        *guard = Some(RunningTranslation {
-            job_id,
-            child: Arc::clone(&child),
-        });
+        guard.insert(
+            owner.to_string(),
+            RunningTranslation {
+                job_id,
+                child: Arc::clone(&child),
+            },
+        );
     }
     {
         let mut guard = state.translation_events.lock().unwrap();
@@ -1187,21 +1193,21 @@ fn spawn_translation_stream(
             }
         }
 
-        let canceled_job_id = app_handle
-            .state::<AppState>()
-            .canceled_job_id
-            .load(Ordering::Relaxed);
         {
             let app_state = app_handle.state::<AppState>();
             let mut guard = app_state.translation.lock().unwrap();
-            if guard.as_ref().map(|running| running.job_id) == Some(job_id) {
-                guard.take();
-            }
+            guard.retain(|_, running| running.job_id != job_id);
         }
 
         let exit_status = child.lock().unwrap().wait();
+        let canceled = app_handle
+            .state::<AppState>()
+            .canceled_jobs
+            .lock()
+            .unwrap()
+            .remove(&job_id);
 
-        if canceled_job_id == job_id {
+        if canceled {
             enqueue_translation_event(
                 &app_handle.state::<AppState>(),
                 job_id,
@@ -1330,10 +1336,11 @@ async fn list_models(app: AppHandle, payload: String) -> Result<String, String> 
 #[tauri::command]
 fn start_translation_stream(
     app: AppHandle,
+    window: tauri::Window,
     payload: String,
     state: State<AppState>,
 ) -> Result<u64, String> {
-    spawn_translation_stream(&app, &payload, &state)
+    spawn_translation_stream(&app, window.label(), &payload, &state)
 }
 
 #[tauri::command]
@@ -1364,7 +1371,11 @@ fn cancel_translation(
     job_id: Option<u64>,
     state: State<AppState>,
 ) -> Result<bool, String> {
-    Ok(cancel_running_translation(&app, &state, job_id, true)?.is_some())
+    // Without a job id this stops nothing: a window always names its own job.
+    if job_id.is_none() {
+        return Ok(false);
+    }
+    Ok(cancel_running_translation(&app, &state, None, job_id, true)?.is_some())
 }
 
 #[tauri::command]
@@ -1476,8 +1487,8 @@ fn main() {
         .manage(AppState {
             quitting: AtomicBool::new(false),
             next_job_id: AtomicU64::new(0),
-            canceled_job_id: AtomicU64::new(0),
-            translation: Mutex::new(None),
+            canceled_jobs: Mutex::new(HashSet::new()),
+            translation: Mutex::new(HashMap::new()),
             translation_events: Mutex::new(HashMap::new()),
             hotkey_listener: Mutex::new(None),
             hotkey_status: Mutex::new(HotkeyStatus {

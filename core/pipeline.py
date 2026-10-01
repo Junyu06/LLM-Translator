@@ -191,10 +191,10 @@ def _keep_leading_indent(source: str, target: str) -> str:
     continuation paragraph, a sub-item); without the indent they would leave
     the list when the blocks are put back together.
     """
-    indent = source[: len(source) - len(source.lstrip(" "))]
+    indent = source[: len(source) - len(source.lstrip(" \t"))]
     if not indent or not target or target.startswith(indent):
         return target
-    return indent + target.lstrip(" ")
+    return indent + target.lstrip(" \t")
 
 
 def split_output(content: str, markdown: bool) -> List[str]:

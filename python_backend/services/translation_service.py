@@ -110,9 +110,10 @@ class TranslationService:
             return {
                 "event": name,
                 "output_text": self._render_output(pairs, output_mode, request.collapse_newlines, join_with),
+                # `kept`: code, blank lines and other blocks shown as they are, never translated.
                 "segments": [
-                    {"source": pair.source, "target": pair.target, "done": is_done}
-                    for pair, is_done in zip(pairs, done)
+                    {"source": pair.source, "target": pair.target, "done": is_done, "kept": not segment.translatable}
+                    for pair, is_done, segment in zip(pairs, done, segments)
                 ],
                 "completed_segments": completed,
                 "total_segments": total,
@@ -140,7 +141,7 @@ class TranslationService:
         finished = event("completed", targets, done, completed, total)
         finished["response"] = TranslationResponse(
             output_text=finished["output_text"],
-            segments=[SegmentResult(source=s.text, target=t) for s, t in zip(segments, targets)],
+            segments=[SegmentResult(source=s.text, target=t, kept=not s.translatable) for s, t in zip(segments, targets)],
             detected_source_lang=detected,
         ).to_dict()
         yield finished
