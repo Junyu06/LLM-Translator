@@ -109,25 +109,29 @@ def split_long_segments(segments: List[Segment], max_tokens: int) -> List[Segmen
             pieces = (piece for s in _sentences(segment.text) for piece in _cut_sentence(s, max_tokens))
             result.extend(Segment(text=part) for part in _pack(pieces, max_tokens, _join_sentences))
         elif segment.kind == "list":
-            parts = _pack(list_items(segment.text), max_tokens, lambda a, b: f"{a}\n{b}")
+            parts = _pack(list_items(segment.text), max_tokens, lambda a, b: f"{a}\n{b}", keep_indent=True)
             result.extend(Segment(text=part, kind="list") for part in parts)
         else:
             result.append(segment)
     return result
 
 
-def _pack(pieces, max_tokens: int, join) -> List[str]:
+def _pack(pieces, max_tokens: int, join, keep_indent: bool = False) -> List[str]:
+    def clean(part: str) -> str:
+        # A list keeps its leading indentation, or nesting would change.
+        return part.strip("\n").rstrip() if keep_indent else part.strip()
+
     parts: List[str] = []
     part = ""
     for piece in pieces:
         joined = join(part, piece) if part else piece
         if part and estimate_tokens(joined) > max_tokens:
-            parts.append(part.strip())
+            parts.append(clean(part))
             part = piece
         else:
             part = joined
     if part.strip():
-        parts.append(part.strip())
+        parts.append(clean(part))
     return parts
 
 

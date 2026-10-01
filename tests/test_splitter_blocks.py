@@ -126,6 +126,16 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         segments = split_markdown_blocks('Text.\n\n[site]: https://example.com\n"Title"')
         self.assertEqual((segments[1].kind, segments[1].protected), ("link_definitions", True))
 
+    def test_indented_paragraph_after_a_blank_line_stays_in_the_list(self):
+        text = "1. Install the app.\n\n    Then open it once so macOS asks for permissions.\n2. Copy text twice."
+        segments = split_markdown_blocks(text)
+        self.assertEqual([(s.kind, s.protected) for s in segments], [("list", False)])
+
+    def test_code_indented_past_the_item_text_is_protected(self):
+        text = "1. Run:\n\n       npm run build\n\n2. Open the app."
+        segments = split_markdown_blocks(text)
+        self.assertIn(("indented_code", True), [(s.kind, s.protected) for s in segments])
+
 
 if __name__ == "__main__":
     unittest.main()

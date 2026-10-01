@@ -13,13 +13,19 @@ export function readStorage(key: string): string | null {
   }
 }
 
-export function writeStorage(key: string, value: string) {
+export function writeStorage(key: string, value: string): boolean {
   try {
     localStorage.setItem(key, value);
+    return true;
   } catch (error) {
     console.error(error);
+    return false;
   }
 }
+
+// Set when unreadable history could not be backed up: saving would then
+// overwrite the only copy, so history is not saved for this session.
+let saveBlocked = false;
 
 const isSegment = (value: unknown): value is TranslationSegment => {
   const segment = value as Partial<TranslationSegment>;
@@ -50,12 +56,13 @@ export function loadHistory(): HistoryItem[] {
   const items = Array.isArray(parsed) ? parsed.filter(isHistoryItem) : [];
   if (!Array.isArray(parsed) || items.length !== parsed.length) {
     // Keep the original value before the next save drops what could not be read.
-    writeStorage(`${HISTORY_KEY}_corrupt_${Date.now()}`, saved);
+    saveBlocked = !writeStorage(`${HISTORY_KEY}_corrupt_${Date.now()}`, saved);
   }
   return items;
 }
 
 export function saveHistory(history: HistoryItem[]) {
+  if (saveBlocked) return;
   writeStorage(HISTORY_KEY, JSON.stringify(history));
 }
 

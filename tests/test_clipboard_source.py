@@ -29,6 +29,13 @@ class ClipboardSourceTests(unittest.TestCase):
     def test_image_url_next_to_image_uses_image(self) -> None:
         self.assertEqual(choose_source("https://example.com/a/chart.jpeg?w=800", has_image=True), "image")
 
+    def test_extensionless_or_fragment_url_next_to_image_uses_image(self) -> None:
+        self.assertEqual(choose_source("https://example.com/image?id=7", has_image=True), "image")
+        self.assertEqual(choose_source("https://cdn.example.com/a.png#preview", has_image=True), "image")
+
+    def test_single_word_next_to_image_is_text(self) -> None:
+        self.assertEqual(choose_source("Quarterly", has_image=True), "text")
+
     def test_file_name_without_image_is_text(self) -> None:
         self.assertEqual(choose_source("photo.png", has_image=False), "text")
 

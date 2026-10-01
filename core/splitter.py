@@ -108,6 +108,7 @@ def split_paragraphs(text: str) -> List[Segment]:
 _FENCE_RE = re.compile(r"^(?P<indent> {0,3})(?P<fence>`{3,}|~{3,})")
 _LIST_MARKER_RE = re.compile(r"^ {0,3}(?:[-+*]\s+\S|\d+[.)]\s+\S)")
 _HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
+_ANY_LIST_MARKER_RE = re.compile(r"^ *(?P<marker>[-+*]|\d+[.)])\s+\S")
 _DEFINITION_START_RE = re.compile(r"^ {0,3}\[[^\]]+\]:[ \t]*$")
 _DEFINITION_TITLE_RE = re.compile(r"""^[ \t]*("[^"]*"|'[^']*'|\([^)]*\))[ \t]*$""")
 
@@ -160,10 +161,12 @@ def _take_list_item_with_code(lines: List[str], start: int) -> tuple[List[str], 
 
 
 def list_items(text: str) -> List[str]:
-    """Split a list block into its top-level items, continuation lines included."""
+    """Split a list block into its top-level items; sub-items and continuation lines stay with their item."""
+    lines = text.split("\n")
+    top = _indent(lines[0])
     items: List[str] = []
-    for line in text.split("\n"):
-        if _LIST_MARKER_RE.match(line) and not line.startswith("    ") or not items:
+    for line in lines:
+        if not items or (_ANY_LIST_MARKER_RE.match(line) and _indent(line) <= top):
             items.append(line)
         else:
             items[-1] += "\n" + line
@@ -285,16 +288,30 @@ def _take_blockquote(lines: List[str], start: int) -> tuple[List[str], int]:
     return block, index
 
 
+def _indent(line: str) -> int:
+    expanded = line.expandtabs(4)
+    return len(expanded) - len(expanded.lstrip(" "))
+
+
 def _take_list(lines: List[str], start: int) -> tuple[List[str], int]:
     index = start
     block: List[str] = []
+    # Where the current item's text starts; a paragraph after a blank line
+    # indented this far still belongs to the item, four more makes it code.
+    content_indent = 2
 
     while index < len(lines):
         line = lines[index]
         # Code nested in a list item becomes its own protected block.
         if _is_any_fence(line) or (block and _starts_item_with_code(line)):
             break
-        if _is_list_marker(line) or (_is_list_continuation(line) and not _is_blank(line)):
+        marker = _ANY_LIST_MARKER_RE.match(line)
+        if marker and _indent(line) < content_indent + 4:
+            content_indent = marker.end("marker") + 1
+            block.append(line)
+            index += 1
+            continue
+        if _is_list_continuation(line) and not _is_blank(line):
             block.append(line)
             index += 1
             continue
@@ -304,7 +321,9 @@ def _take_list(lines: List[str], start: int) -> tuple[List[str], int]:
             continue
         if _is_blank(line) and index + 1 < len(lines):
             next_line = lines[index + 1]
-            if _is_list_marker(next_line) or (_is_list_continuation(next_line) and not _is_indented(next_line)):
+            if _is_list_marker(next_line) or (
+                not _is_blank(next_line) and content_indent <= _indent(next_line) < content_indent + 4
+            ):
                 block.append(line)
                 index += 1
                 continue

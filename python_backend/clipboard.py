@@ -8,6 +8,7 @@ handled the same way everywhere.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from typing import Any
 
@@ -15,11 +16,17 @@ _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tiff", ".tif", "
 
 
 def _looks_like_image_reference(text: str) -> bool:
-    """Finder and browsers put the file name or URL next to a copied image."""
+    """Finder and browsers put the file name or URL next to a copied image.
+
+    Any single URL counts (CDN and proxy URLs often have no extension); a
+    plain word or a sentence does not.
+    """
     stripped = text.strip()
     if not stripped or "\n" in stripped:
         return False
-    path = stripped.split("?", 1)[0]
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:\S*$", stripped):
+        return True
+    path = re.split(r"[?#]", stripped, maxsplit=1)[0]
     return os.path.splitext(path)[1].lower() in _IMAGE_EXTENSIONS
 
 

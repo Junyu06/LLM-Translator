@@ -84,6 +84,16 @@ class LongParagraphTests(unittest.TestCase):
         self.assertTrue(all(p.kind == "list" and p.text.startswith("- 第") for p in parts))
         self.assertEqual("\n".join(p.text for p in parts), "\n".join(items))
 
+    def test_long_nested_list_keeps_sub_items_under_their_parent(self):
+        lines = []
+        for top in range(2):
+            lines.append(f"- 顶层{top}")
+            lines.extend(f"  - 子项{top}-{i}：" + "说明文字。" * 40 for i in range(10))
+        text = "\n".join(lines)
+        parts = split_long_segments([Segment(text, kind="list")], max_tokens=600)
+        self.assertEqual("\n".join(p.text for p in parts), text)
+        self.assertTrue(all(p.text.startswith("- 顶层") for p in parts))
+
     def test_short_paragraphs_and_code_are_left_alone(self):
         segments = [Segment("Short."), Segment("x = 1\n" * 2000, protected=True, kind="fenced_code")]
         self.assertEqual(split_long_segments(segments, max_tokens=300), segments)
