@@ -250,6 +250,8 @@ def list_items(text: str) -> List[str]:
 
 _recorder = threading.local()
 _URL_START_RE = re.compile(r"https?://|www\.", re.IGNORECASE)
+# What follows the link text of a reference link: nothing, `[]`, or `[label]`.
+_LABEL_TAIL_RE = re.compile(r"(?:\[[^\[\]\n]*\])?")
 
 
 def _recording(rule, label_offset: int, disable_nested: bool, url_attr: str):
@@ -266,6 +268,12 @@ def _recording(rule, label_offset: int, disable_nested: bool, url_attr: str):
         if tail.startswith("(") and tail.endswith(")"):
             # An inline link already; its destination is not plain text.
             _recorder.not_text.append((state.src, start, end))
+            return ok
+        # Anything else after the link text means the parser recovered from
+        # broken syntax (`[a]( ...`) and swallowed text; replacing it would
+        # delete that text, so such a link is left as it is.
+        if not _LABEL_TAIL_RE.fullmatch(tail):
+            _recorder.unsafe = True
             return ok
         # Pending plain text is flushed first, so the link is not always the first new token.
         token = next((t for t in state.tokens[first_token:] if t.type in ("link_open", "image")), None)
@@ -295,6 +303,14 @@ _MD.inline.ruler.at("backticks", _not_text(rules_inline.backtick))
 _MD.inline.ruler.at("autolink", _not_text(rules_inline.autolink))
 
 
+def _has_open_inline_link(content: str, not_text: List[Tuple[int, int]]) -> bool:
+    """`](` that is not part of a finished inline link, code span or autolink."""
+    for match in re.finditer(r"\]\(", content):
+        if not any(start <= match.start() < end for start, end in not_text):
+            return True
+    return False
+
+
 def _inside_bare_url(content: str, link_start: int, not_text: List[Tuple[int, int]]) -> bool:
     """Whether a URL in plain text runs, without a space, up to the link.
 
@@ -311,14 +327,20 @@ def _inside_bare_url(content: str, link_start: int, not_text: List[Tuple[int, in
     return False
 
 
+def _markdown_literal(value: str) -> str:
+    """Write a parsed (already decoded) value back so it parses to itself:
+    no entity is decoded twice and no pipe splits a table cell."""
+    return value.replace("\\", "\\\\").replace("&", "&amp;").replace("|", "\\|")
+
+
 def _inline_destination(url: str, title: str) -> str:
+    destination = _markdown_literal(url).replace("<", "\\<").replace(">", "\\>")
     if not title:
-        return f"(<{url}>)"
-    escaped = title.replace("\\", "\\\\").replace('"', '\\"')
-    return f'(<{url}> "{escaped}")'
+        return f"(<{destination}>)"
+    return f'(<{destination}> "{_markdown_literal(title).replace(chr(34), chr(92) + chr(34))}")'
 
 
-def _content_line_starts(lines: List[str], first: int, content: str, cursors: dict) -> List[int | None]:
+def _content_line_starts(lines: List[str], first: int, content: str, cursors: dict, in_table: bool) -> List[int | None]:
     """Where each line of an inline token's content starts in the text, or None if it cannot be placed.
 
     A paragraph line is the end of its source line (container markers come
@@ -333,7 +355,7 @@ def _content_line_starts(lines: List[str], first: int, content: str, cursors: di
             starts.append(None)
             continue
         line = lines[number]
-        if "\\|" in line:
+        if in_table and "\\|" in line:
             # A table cell's content has `\|` unescaped, so it no longer matches
             # its source and could match across cells. Leave such a line alone.
             cursors[number] = len(line) + 1
@@ -363,11 +385,15 @@ def inline_reference_links(text: str) -> str:
     lines = text.split("\n")
     edits = []
     cursors: dict = {}
+    in_table = False
     for token in tokens:
+        if token.type in ("table_open", "table_close"):
+            in_table = token.type == "table_open"
         if token.type != "inline" or token.map is None:
             continue
         _recorder.spans = []
         _recorder.not_text = []
+        _recorder.unsafe = False
         try:
             _MD.inline.parse(token.content, _MD, env, [])
             spans = _recorder.spans
@@ -375,8 +401,10 @@ def inline_reference_links(text: str) -> str:
         finally:
             _recorder.spans = None
         # Placed even without links, so the next cell on the line is looked for after this one.
-        line_starts = _content_line_starts(lines, token.map[0], token.content, cursors)
-        if not spans:
+        line_starts = _content_line_starts(lines, token.map[0], token.content, cursors, in_table)
+        # An unfinished `[text](` would be completed by the `)` an inline link
+        # adds, turning text before it into a link. Leave such a paragraph alone.
+        if not spans or _recorder.unsafe or _has_open_inline_link(token.content, not_text):
             continue
         content_offsets = []
         offset = 0
