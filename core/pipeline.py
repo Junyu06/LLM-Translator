@@ -87,6 +87,38 @@ def plan_chunks(segments: List[Segment], opt: PipelineOptions) -> List[List[int]
     return chunks
 
 
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+|(?<=[。！？；])")
+
+
+def split_long_segments(segments: List[Segment], max_tokens: int) -> List[Segment]:
+    """Cut paragraphs too long for one request into sentence groups.
+
+    A paragraph whose source and translation together exceed Ollama's default
+    context would be silently truncated, so it is translated in parts, each
+    shown as its own pair.
+    """
+    result: List[Segment] = []
+    for segment in segments:
+        if not segment.translatable or segment.kind != "text" or estimate_tokens(segment.text) <= max_tokens:
+            result.append(segment)
+            continue
+        part = ""
+        for sentence in (s for s in _SENTENCE_END_RE.split(segment.text) if s.strip()):
+            joined = f"{part} {sentence}".strip() if part and not _ends_cjk(part) else part + sentence
+            if part and estimate_tokens(joined) > max_tokens:
+                result.append(Segment(text=part.strip()))
+                part = sentence
+            else:
+                part = joined
+        if part.strip():
+            result.append(Segment(text=part.strip()))
+    return result
+
+
+def _ends_cjk(text: str) -> bool:
+    return bool(text) and unicodedata.east_asian_width(text[-1]) in "WF"
+
+
 def split_output(content: str, markdown: bool) -> List[str]:
     """Split a chunk translation back into paragraphs.
 

@@ -13,11 +13,16 @@ from core import (
     iter_translation,
     pairs_from,
     render_output,
+    split_long_segments,
     split_markdown_blocks,
     split_paragraphs,
 )
 
 from ..models import SegmentResult, TranslationRequest, TranslationResponse
+
+
+# Longer paragraphs are cut at sentence ends; see split_long_segments.
+LONG_PARAGRAPH_TOKENS = 1200
 
 
 class TranslationFailed(Exception):
@@ -51,7 +56,11 @@ class TranslationService:
             raise ValueError("Nothing to translate.")
 
         markdown = request.translation_mode == "markdown"
-        segments = split_markdown_blocks(text) if markdown else self._trim_blank_edges(split_paragraphs(text))
+        segments = (
+            split_markdown_blocks(text)
+            if markdown
+            else split_long_segments(self._trim_blank_edges(split_paragraphs(text)), LONG_PARAGRAPH_TOKENS)
+        )
         self._validate_request_budget(request, text, segments)
 
         detected = self._detect_source_lang(text) if request.source_lang == "auto" else request.source_lang

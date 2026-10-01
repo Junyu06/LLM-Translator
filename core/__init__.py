@@ -10,6 +10,7 @@ from .pipeline import (
     pairs_from,
     plan_chunks,
     render_output,
+    split_long_segments,
 )
 
 __all__ = [
@@ -17,5 +18,5 @@ __all__ = [
     "ModelFamily", "build_prompt", "detect_family",
     "extract_translation",
     "AlignedPair", "OutputMode", "PipelineOptions", "Progress",
-    "iter_translation", "pairs_from", "plan_chunks", "render_output",
+    "iter_translation", "pairs_from", "plan_chunks", "render_output", "split_long_segments",
 ]

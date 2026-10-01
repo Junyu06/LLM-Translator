@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from backend.errors import BackendRequestError
-from core.pipeline import PipelineOptions, iter_translation, plan_chunks
+from core.pipeline import PipelineOptions, estimate_tokens, iter_translation, plan_chunks, split_long_segments
 from core.splitter import Segment, split_markdown_blocks, split_paragraphs
 
 
@@ -46,6 +46,26 @@ class ChunkPlanTests(unittest.TestCase):
         chunks = plan_chunks(segments, PipelineOptions(chunk_tokens=300))
         self.assertGreater(len(chunks), 1)
         self.assertEqual(sum(len(c) for c in chunks), 5)
+
+
+class LongParagraphTests(unittest.TestCase):
+    def test_long_paragraph_is_cut_at_sentence_ends(self):
+        text = " ".join(f"Sentence number {i} explains one more detail of the system." for i in range(200))
+        parts = split_long_segments([Segment(text)], max_tokens=300)
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(estimate_tokens(p.text) <= 300 for p in parts))
+        self.assertEqual(" ".join(p.text for p in parts), text)
+
+    def test_long_chinese_paragraph_is_cut_after_full_stops(self):
+        text = "".join(f"这是第{i}句话，用来测试很长的中文段落。" for i in range(300))
+        parts = split_long_segments([Segment(text)], max_tokens=300)
+        self.assertGreater(len(parts), 1)
+        self.assertEqual("".join(p.text for p in parts), text)
+        self.assertTrue(all(p.text.endswith("。") for p in parts))
+
+    def test_short_paragraphs_and_code_are_left_alone(self):
+        segments = [Segment("Short."), Segment("x = 1\n" * 2000, protected=True, kind="fenced_code")]
+        self.assertEqual(split_long_segments(segments, max_tokens=300), segments)
 
 
 class IterTranslationTests(unittest.TestCase):
