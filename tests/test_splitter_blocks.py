@@ -184,7 +184,7 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         segments = split_markdown_blocks("See [the **[docs]**][site].\n\n[site]: https://example.com")
         self.assertEqual(segments[0].text, "See [the **[docs]**](<https://example.com>).")
 
-    def test_codex_round_eleven_link_cases(self):
+    def test_links_in_urls_brackets_and_images(self):
         defs = "\n\n[site]: https://target.example\n[docs]: https://docs.example"
         cases = {
             "[search](https://example.com/(v1)/[site])": "[search](https://example.com/(v1)/[site])",
@@ -198,7 +198,7 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         only_site = split_markdown_blocks("[the [API [docs]]][site]\n\n[site]: https://target.example")
         self.assertEqual(only_site[0].text, "[the [API [docs]]](<https://target.example>)")
 
-    def test_codex_round_twelve_link_cases(self):
+    def test_alt_text_bare_urls_and_repeated_table_cells(self):
         defs = "\n\n[site]: /target"
         self.assertEqual(
             split_markdown_blocks("https://example.com/path ![x [site]](/image)" + defs)[0].text,
@@ -211,7 +211,7 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         table = "| [site] | [site] |\n|---|---|\n| a | b |" + defs
         self.assertEqual(split_markdown_blocks(table)[0].text.splitlines()[0], "| [site](</target>) | [site](</target>) |")
 
-    def test_codex_round_thirteen_link_cases(self):
+    def test_links_after_code_spans_and_inline_links(self):
         defs = "\n\n[site]: /target"
         table = "| `[site]` | [site] |\n|---|---|\n| a | b |" + defs
         self.assertEqual(split_markdown_blocks(table)[0].text.splitlines()[0], "| `[site]` | [site](</target>) |")
@@ -224,7 +224,7 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
             "`https://example.com`[site](</target>)",
         )
 
-    def test_codex_round_fourteen_link_cases(self):
+    def test_escaped_pipes_and_several_links_in_one_url(self):
         defs = "\n\n[site]: /target\n[docs]: /manual"
         table = "| `\\| [site]` | [site] |\n|---|---|\n| a | b |" + defs
         self.assertEqual(split_markdown_blocks(table)[0].text.splitlines()[0], "| `\\| [site]` | [site] |")
@@ -232,7 +232,7 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         self.assertEqual(split_markdown_blocks(url + defs)[0].text, url)
         self.assertEqual(split_markdown_blocks("word[site]" + defs)[0].text, "word[site](</target>)")
 
-    def test_codex_round_fifteen_link_cases(self):
+    def test_escaped_pipe_rows_and_links_after_autolinks(self):
         defs = "\n\n[site]: /target"
         table = "| a\\|b | [site] | a|b | `[site]` |\n|---|---|---|---|---|\n|1|2|3|4|5|" + defs
         self.assertEqual(split_markdown_blocks(table)[0].text.splitlines()[0], "| a\\|b | [site] | a|b | `[site]` |")

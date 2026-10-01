@@ -15,8 +15,8 @@ from core.splitter import inline_reference_links, split_markdown_blocks
 
 FRAGMENTS = [
     "[site]", "[Site][]", "[the docs][site]", "[the [API [docs]]][site]", "![alt][docs]", "[![CI][docs]][ci]",
-    "[x](https://e.com/(v1)/[site])", "<https://a.b/[site]>", "https://c.d/[site]", "(https://e.com/(v1)/[site]/m)",
-    "`[site]`", "`https://x.y`[site]", "[x](https://e.com)[site]", "\\[site]", "[site\\]", "[undefined]",
+    "[x](https://e.example/(v1)/[site])", "<https://a.b/[site]>", "https://c.d/[site]", "(https://e.example/(v1)/[site]/m)",
+    "`[site]`", "`https://x.y`[site]", "[x](https://e.example)[site]", "\\[site]", "[site\\]", "[undefined]",
     "word[site]", "https://q.example/?a=[site]&b=[docs]", "&amp; &copy;", "a\\|b", "**[site]**", "_[docs]_",
     "[ci][]", "[DOCS]", "text", "<span>[site]</span>", "[a\nb][site]", "[site](", "[]", "~~[site]~~",
     "www.example.com/[site]",
