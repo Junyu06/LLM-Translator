@@ -90,6 +90,7 @@ Set `TRANSLATOR_STARTUP_LOG=1` and optionally `TRANSLATOR_STARTUP_LOG_FILE=<path
 - Translation quality depends on the model
 - OCR relies on system language packs
 - OCR returns lines in the order Vision gives them; multi-column screenshots can come out interleaved
+- Reference links are left as written in a few rare places: table rows with an escaped `\|`, lines indented with tabs, and syntax that CommonMark and GitHub read differently. They still work in the translation-only view
 
 ## Roadmap
 

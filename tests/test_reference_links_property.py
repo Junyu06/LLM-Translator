@@ -31,6 +31,8 @@ DEFINITIONS = [
     '[docs]: https://d.example/x_(y) "a & b"',
     "[docs]: /p?x=1&y=2",
     "[ci]: https://ci.example 'CI'",
+    '[ci]: /target "a&#10;b"',
+    '[docs]: /target "first\nsecond"',
     '[ci]: <a\\>b> "t\\\\"',
 ]
 
@@ -68,6 +70,10 @@ class ReferenceLinkRewriteTests(unittest.TestCase):
             rewritten += result != document
             self.assertEqual(md.render(result), md.render(document), document)
         self.assertGreater(rewritten, 200)
+
+    def test_a_line_break_in_a_title_stays_inside_the_link(self):
+        segments = split_markdown_blocks('# [x]\n\n[x]: /target "a&#10;b"')
+        self.assertEqual(segments[0].text, '# [x](</target> "a&#10;b")')
 
     def test_text_swallowed_by_broken_syntax_is_never_deleted(self):
         text = "[site]( ~~[site]~~ `[site]`\n\n[site]:\n 'multi'"

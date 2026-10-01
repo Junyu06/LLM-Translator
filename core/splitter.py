@@ -329,8 +329,12 @@ def _inside_bare_url(content: str, link_start: int, not_text: List[Tuple[int, in
 
 def _markdown_literal(value: str) -> str:
     """Write a parsed (already decoded) value back so it parses to itself:
-    no entity is decoded twice and no pipe splits a table cell."""
-    return value.replace("\\", "\\\\").replace("&", "&amp;").replace("|", "\\|")
+    no entity is decoded twice, no pipe splits a table cell, no line break
+    splits the block."""
+    return (
+        value.replace("\\", "\\\\").replace("&", "&amp;").replace("|", "\\|")
+        .replace("\r", "&#13;").replace("\n", "&#10;")
+    )
 
 
 def _inline_destination(url: str, title: str) -> str:
