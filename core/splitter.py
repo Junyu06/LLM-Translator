@@ -6,9 +6,11 @@ are joined back first. Blank lines stay as passthrough units so the output
 keeps the original spacing.
 
 Markdown mode: one unit per Markdown block (heading, paragraph, list,
-blockquote, table). Code, quotes that contain code, and reference link
-definitions are protected from translation; reference links are rewritten
-as inline links so every block renders on its own.
+blockquote, table), found by markdown-it-py with the same CommonMark rules
+the display uses. Code, quotes that contain code, HTML blocks, thematic
+breaks and reference link definitions are protected from translation;
+reference links are rewritten as inline links so every block renders on
+its own.
 """
 
 from __future__ import annotations
@@ -16,7 +18,10 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List, Tuple
+
+from markdown_it import MarkdownIt
+from markdown_it.common.utils import normalizeReference
 
 
 @dataclass
@@ -109,320 +114,127 @@ def split_paragraphs(text: str) -> List[Segment]:
 
 # ---------- Markdown mode ----------
 
-_FENCE_RE = re.compile(r"^(?P<indent> {0,3})(?P<fence>`{3,}|~{3,})")
-_LIST_MARKER_RE = re.compile(r"^ {0,3}(?:[-+*]\s+\S|\d+[.)]\s+\S)")
-_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
-_ANY_LIST_MARKER_RE = re.compile(r"^ *(?P<marker>[-+*]|\d+[.)])\s+\S")
-_DEFINITION_START_RE = re.compile(r"^ {0,3}\[[^\]]+\]:[ \t]*$")
-_DEFINITION_TITLE_RE = re.compile(r"""^[ \t]*("[^"]*"|'[^']*'|\([^)]*\))[ \t]*$""")
+_MD = MarkdownIt("commonmark").enable("table")
+
+_BLOCK_KINDS = {
+    "paragraph_open": "text",
+    "heading_open": "heading",
+    "bullet_list_open": "list",
+    "ordered_list_open": "list",
+    "blockquote_open": "blockquote",
+    "table_open": "table",
+    "fence": "fenced_code",
+    "code_block": "indented_code",
+    "html_block": "html",
+    "hr": "hr",
+}
+_PROTECTED_KINDS = {"fenced_code", "indented_code", "html", "hr"}
+_CODE_TOKENS = {"fence", "code_block"}
 
 
-def _is_blank(line: str) -> bool:
-    return not line.strip()
+def _top_level_blocks(tokens) -> List[Tuple[str, int, int, list]]:
+    """(kind, first line, end line, tokens inside) for every top-level block."""
+    blocks = []
+    for index, token in enumerate(tokens):
+        if token.level != 0 or token.map is None or token.type not in _BLOCK_KINDS:
+            continue
+        inner = []
+        if token.nesting == 1:
+            depth = 0
+            for inner_token in tokens[index:]:
+                depth += inner_token.nesting
+                inner.append(inner_token)
+                if depth == 0:
+                    break
+        blocks.append((_BLOCK_KINDS[token.type], token.map[0], token.map[1], inner))
+    return blocks
 
 
-def _is_indented(line: str) -> bool:
-    return line.startswith("    ") or line.startswith("\t")
+def _lines_text(lines: List[str], start: int, end: int) -> str:
+    part = lines[start:end]
+    while part and not part[-1].strip():
+        part.pop()
+    while part and not part[0].strip():
+        part.pop(0)
+    return "\n".join(part)
 
 
-def _is_list_marker(line: str) -> bool:
-    return _LIST_MARKER_RE.match(line) is not None
+def _split_list(lines: List[str], start: int, end: int, inner) -> List[Segment]:
+    """A list with code in it: the code becomes its own protected block.
+
+    An item whose first line opens the code (`- ```python`) is protected as a
+    whole, marker included.
+    """
+    item_starts = {token.map[0] for token in inner if token.type == "list_item_open"}
+    code = sorted({tuple(token.map) for token in inner if token.type in _CODE_TOKENS and token.map})
+    segments: List[Segment] = []
+    cursor = start
+    for code_start, code_end in code:
+        if code_start < cursor:
+            continue  # code nested in code already taken
+        before = _lines_text(lines, cursor, code_start)
+        if before:
+            segments.append(Segment(text=before, kind="list"))
+        opens_item = code_start in item_starts
+        token = next(t for t in inner if t.type in _CODE_TOKENS and t.map and t.map[0] == code_start)
+        kind = "list" if opens_item else _BLOCK_KINDS[token.type]
+        segments.append(Segment(text=_lines_text(lines, code_start, code_end), protected=True, kind=kind))
+        cursor = code_end
+    rest = _lines_text(lines, cursor, end)
+    if rest:
+        segments.append(Segment(text=rest, kind="list"))
+    return segments
 
 
-def _is_list_continuation(line: str) -> bool:
-    return line.startswith("  ") or line.startswith("\t")
+def split_markdown_blocks(text: str) -> List[Segment]:
+    """Split Markdown into blocks. Code and other non-prose blocks are protected; the rest is translated."""
+    if not text:
+        return []
 
+    env: dict = {}
+    tokens = _MD.parse(text, env)
+    lines = text.split("\n")
+    segments: List[Segment] = []
+    covered_until = 0
 
-def _is_heading(line: str) -> bool:
-    return _HEADING_RE.match(line) is not None
+    def add_definitions(until: int) -> None:
+        # Lines no block covers are reference link definitions (markdown-it
+        # keeps them in env, not in the token stream).
+        definitions = _lines_text(lines, covered_until, until)
+        if definitions:
+            segments.append(Segment(text=definitions, protected=True, kind="link_definitions"))
 
+    for kind, start, end, inner in _top_level_blocks(tokens):
+        add_definitions(start)
+        covered_until = end
+        block = _lines_text(lines, start, end)
+        if not block:
+            continue
+        has_code = any(token.type in _CODE_TOKENS for token in inner)
+        if kind == "list" and has_code:
+            segments.extend(_split_list(lines, start, end, inner))
+            continue
+        # A quote that contains code is kept whole; splitting it would break the quote.
+        protected = kind in _PROTECTED_KINDS or (kind == "blockquote" and has_code)
+        segments.append(Segment(text=block, protected=protected, kind=kind))
+    add_definitions(len(lines))
 
-def _is_any_fence(line: str) -> bool:
-    """A code fence at any indentation, including one nested in a list item."""
-    stripped = line.lstrip()
-    return stripped.startswith("```") or stripped.startswith("~~~")
-
-
-def _without_list_marker(line: str) -> str:
-    match = _LIST_MARKER_RE.match(line)
-    return line[match.end() - 1:] if match else line
-
-
-def _starts_item_with_code(line: str) -> bool:
-    """`- ```python`: a list item whose first line opens a code fence."""
-    return _is_list_marker(line) and _is_any_fence(_without_list_marker(line))
-
-
-def _take_list_item_with_code(lines: List[str], start: int) -> tuple[List[str], int]:
-    fence = _without_list_marker(lines[start]).lstrip()
-    marker = fence[0] * (len(fence) - len(fence.lstrip(fence[0])))
-    index = start + 1
-    while index < len(lines):
-        if lines[index].lstrip().startswith(marker):
-            return lines[start:index + 1], index + 1
-        index += 1
-    return lines[start:], len(lines)
+    return _inline_reference_links(segments, env.get("references", {}))
 
 
 def list_items(text: str) -> List[str]:
     """Split a list block into its top-level items; sub-items and continuation lines stay with their item."""
     lines = text.split("\n")
-    top = _indent(lines[0])
-    items: List[str] = []
-    for line in lines:
-        if not items or (_ANY_LIST_MARKER_RE.match(line) and _indent(line) <= top):
-            items.append(line)
-        else:
-            items[-1] += "\n" + line
-    return items
-
-
-def _quote_contains_code(block: List[str]) -> bool:
-    """Fenced or indented code anywhere inside a (possibly nested) blockquote."""
-    for line in block:
-        content = line
-        while content.lstrip().startswith(">"):
-            content = content.lstrip()[1:]
-            if content.startswith(" "):
-                content = content[1:]
-        if _is_any_fence(_without_list_marker(content)) or (_is_indented(content) and content.strip()):
-            return True
-    return False
-
-
-def _is_table_separator(line: str) -> bool:
-    stripped = line.strip()
-    if "|" not in stripped:
-        return False
-
-    cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-    if not cells:
-        return False
-
-    return all(re.fullmatch(r":?-{3,}:?", cell or "") is not None for cell in cells)
-
-
-def _is_table_start(lines: List[str], index: int) -> bool:
-    return (
-        index + 1 < len(lines)
-        and "|" in lines[index]
-        and _is_table_separator(lines[index + 1])
-    )
-
-
-def _starts_new_block(lines: List[str], index: int) -> bool:
-    """Lines that end a lazy continuation of a list or blockquote."""
-    line = lines[index]
-    return (
-        _FENCE_RE.match(line) is not None
-        or _is_indented(line)
-        or _is_table_start(lines, index)
-        or _is_heading(line)
-    )
-
-
-def _take_fenced_code(lines: List[str], start: int) -> tuple[List[str], int]:
-    match = _FENCE_RE.match(lines[start])
-    if match is None:
-        return [lines[start]], start + 1
-
-    fence = match.group("fence")
-    fence_char = fence[0]
-    close_re = re.compile(rf"^ {{0,3}}{re.escape(fence_char) * len(fence)}{fence_char}*[ \t]*$")
-
-    index = start + 1
-    while index < len(lines):
-        if close_re.match(lines[index]):
-            return lines[start:index + 1], index + 1
-        index += 1
-
-    return lines[start:], len(lines)
-
-
-def _take_indented_code(lines: List[str], start: int) -> tuple[List[str], int]:
-    index = start
-    block: List[str] = []
-
-    while index < len(lines):
-        line = lines[index]
-        if _is_indented(line):
-            block.append(line)
-            index += 1
-            continue
-        if _is_blank(line) and index + 1 < len(lines) and _is_indented(lines[index + 1]):
-            block.append(line)
-            index += 1
-            continue
-        break
-
-    return block, index
-
-
-def _take_table(lines: List[str], start: int) -> tuple[List[str], int]:
-    index = start
-    block: List[str] = []
-
-    while index < len(lines) and not _is_blank(lines[index]) and "|" in lines[index]:
-        block.append(lines[index])
-        index += 1
-
-    return block, index
-
-
-def _take_blockquote(lines: List[str], start: int) -> tuple[List[str], int]:
-    index = start
-    block: List[str] = []
-
-    while index < len(lines):
-        line = lines[index]
-        if line.lstrip().startswith(">"):
-            block.append(line)
-            index += 1
-            continue
-        if not _is_blank(line) and not _starts_new_block(lines, index) and not _is_list_marker(line):
-            block.append(line)
-            index += 1
-            continue
-        if _is_blank(line) and index + 1 < len(lines) and lines[index + 1].lstrip().startswith(">"):
-            block.append(line)
-            index += 1
-            continue
-        break
-
-    return block, index
-
-
-def _indent(line: str) -> int:
-    expanded = line.expandtabs(4)
-    return len(expanded) - len(expanded.lstrip(" "))
-
-
-def _continues_item(indent: int, open_levels: List[int]) -> bool:
-    return any(level <= indent < level + 4 for level in open_levels)
-
-
-def _close_deeper(open_levels: List[int], indent: int) -> None:
-    while open_levels and open_levels[-1] > indent:
-        open_levels.pop()
-
-
-def _take_list(lines: List[str], start: int) -> tuple[List[str], int]:
-    index = start
-    block: List[str] = []
-    # Where the text of each open item starts, outermost first. A paragraph
-    # after a blank line belongs to the list when it is indented to one of
-    # these levels (and less than four more, which would make it code). Going
-    # back to a shallower indent closes the deeper items.
-    open_levels: List[int] = []
-
-    while index < len(lines):
-        line = lines[index]
-        # Code nested in a list item becomes its own protected block.
-        if _is_any_fence(line) or (block and _starts_item_with_code(line)):
-            break
-        marker = _ANY_LIST_MARKER_RE.match(line)
-        # A marker indented four past the deepest item text is code, not an item.
-        if marker and (not open_levels or _indent(line) < open_levels[-1] + 4):
-            _close_deeper(open_levels, _indent(line))
-            open_levels.append(marker.end("marker") + 1)
-            block.append(line)
-            index += 1
-            continue
-        if _is_list_continuation(line) and not _is_blank(line):
-            block.append(line)
-            index += 1
-            continue
-        if not _is_blank(line) and not _starts_new_block(lines, index) and not line.lstrip().startswith(">"):
-            block.append(line)
-            index += 1
-            continue
-        if _is_blank(line) and index + 1 < len(lines):
-            next_line = lines[index + 1]
-            if _is_list_marker(next_line) or (
-                not _is_blank(next_line) and _continues_item(_indent(next_line), open_levels)
-            ):
-                if not _is_list_marker(next_line):
-                    _close_deeper(open_levels, _indent(next_line))
-                block.append(line)
-                index += 1
-                continue
-        break
-
-    return block, index
-
-
-def _take_text(lines: List[str], start: int) -> tuple[List[str], int]:
-    index = start
-    block: List[str] = []
-
-    while index < len(lines):
-        line = lines[index]
-        if _is_blank(line):
-            break
-        if block and (
-            _FENCE_RE.match(line)
-            or _is_table_start(lines, index)
-            or line.lstrip().startswith(">")
-            or _is_list_marker(line)
-            or _is_heading(line)
-        ):
-            break
-        block.append(line)
-        index += 1
-
-    return block, index
-
-
-def split_markdown_blocks(text: str) -> List[Segment]:
-    """Split Markdown into blocks. Code blocks are protected; everything else is translated."""
-    if not text:
-        return []
-
-    lines = text.splitlines()
-    segments: List[Segment] = []
-    index = 0
-
-    while index < len(lines):
-        line = lines[index]
-        if _is_blank(line):
-            index += 1
-            continue
-
-        protected = False
-        if _FENCE_RE.match(line):
-            block, index = _take_fenced_code(lines, index)
-            protected, kind = True, "fenced_code"
-        elif _is_indented(line):
-            block, index = _take_indented_code(lines, index)
-            protected, kind = True, "indented_code"
-        elif _is_heading(line):
-            block, index = [line], index + 1
-            kind = "heading"
-        elif _is_table_start(lines, index):
-            block, index = _take_table(lines, index)
-            kind = "table"
-        elif line.lstrip().startswith(">"):
-            block, index = _take_blockquote(lines, index)
-            kind = "blockquote"
-            # A quote that contains code is kept whole; splitting it would break the quote.
-            if _quote_contains_code(block):
-                protected = True
-        elif _starts_item_with_code(line):
-            block, index = _take_list_item_with_code(lines, index)
-            protected, kind = True, "list"
-        elif _is_list_marker(line):
-            block, index = _take_list(lines, index)
-            kind = "list"
-        else:
-            block, index = _take_text(lines, index)
-            kind = "text"
-            # Reference link definitions carry URLs, not prose.
-            if _is_definition_block(block):
-                protected, kind = True, "link_definitions"
-
-        segments.append(Segment(text="\n".join(block), protected=protected, kind=kind))
-
-    return _inline_reference_links(segments)
+    starts = [
+        token.map[0]
+        for token in _MD.parse(text)
+        if token.type == "list_item_open" and token.level == 1 and token.map
+    ]
+    if not starts:
+        return [text]
+    starts[0] = 0
+    bounds = starts + [len(lines)]
+    return ["\n".join(lines[bounds[i]:bounds[i + 1]]).rstrip("\n") for i in range(len(starts))]
 
 
 _DEFINITION_RE = re.compile(
@@ -434,53 +246,41 @@ _REFERENCE_LINK_RE = re.compile(r"(?<![\]\\])\[(?P<text>(?:[^\[\]\\]|\\.)+)\](?:
 _CODE_SPAN_RE = re.compile(r"(`+).+?\1", re.DOTALL)
 
 
-def _is_definition_block(block: List[str]) -> bool:
-    """Every line belongs to a definition: `[label]: url "title"`, or the URL
-    and title on following lines. A definition cannot interrupt a paragraph,
-    so a block that starts with prose is not one."""
-    if not block:
-        return False
-    after_start = after_definition = False
-    for line in block:
-        if _DEFINITION_RE.match(line):
-            after_start, after_definition = False, True
-        elif _DEFINITION_START_RE.match(line):
-            after_start, after_definition = True, False
-        elif after_start and line[:1].isspace() and line.strip():
-            after_definition = True
-        elif not (after_definition and _DEFINITION_TITLE_RE.match(line)):
-            return False
-    return True
-
-
-def _normalize_label(label: str) -> str:
-    return " ".join(label.split()).lower()
-
-
-def _inline_reference_links(segments: List[Segment]) -> List[Segment]:
-    """Rewrite reference links as inline links: `[the docs][site]` -> `[the docs](https://...)`.
-
-    A reference link only works with its definition, which lives in another
-    block, and its label is easy for a model to translate. As an inline link
-    each block carries its own URL and renders on its own. Code spans are left
-    alone; definitions spread over several lines are not rewritten.
-    """
-    targets = {}
+def _link_targets(segments: List[Segment], references: Dict[str, dict]) -> Dict[str, str]:
+    """Label -> inline link destination. One-line definitions keep their exact
+    text (an `<...>` destination stays valid); others use markdown-it's parse."""
+    targets: Dict[str, str] = {}
     for segment in segments:
         if segment.kind != "link_definitions":
             continue
         for line in segment.text.splitlines():
             match = _DEFINITION_RE.match(line)
             if match:
-                url = match.group("url")  # <...> stays: it is valid in an inline link too
                 title = f" {match.group('title')}" if match.group("title") else ""
-                targets.setdefault(_normalize_label(match.group("label")), f"{url}{title}")
+                targets.setdefault(normalizeReference(match.group("label")), f"{match.group('url')}{title}")
+    for label, reference in references.items():
+        if label not in targets:
+            title = reference.get("title") or ""
+            title = ' "{}"'.format(title.replace('"', '\\"')) if title else ""
+            targets[label] = f"<{reference['href']}>{title}"
+    return targets
+
+
+def _inline_reference_links(segments: List[Segment], references: Dict[str, dict]) -> List[Segment]:
+    """Rewrite reference links as inline links: `[the docs][site]` -> `[the docs](https://...)`.
+
+    A reference link only works with its definition, which lives in another
+    block, and its label is easy for a model to translate. As an inline link
+    each block carries its own URL and renders on its own. Code spans are left
+    alone.
+    """
+    targets = _link_targets(segments, references)
     if not targets:
         return segments
 
     def inline(match: re.Match) -> str:
         label = match.group("label")
-        target = targets.get(_normalize_label(label if label else match.group("text")))
+        target = targets.get(normalizeReference(label if label else match.group("text")))
         return f"[{match.group('text')}]({target})" if target else match.group(0)
 
     def rewrite(text: str) -> str:

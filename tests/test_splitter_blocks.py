@@ -159,6 +159,17 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         segments = split_markdown_blocks(text)
         self.assertIn(("indented_code", True), [(s.kind, s.protected) for s in segments])
 
+    def test_html_blocks_and_thematic_breaks_are_protected(self):
+        text = "Intro.\n\n<details>\n<summary>More</summary>\n</details>\n\n---\n\nOutro."
+        self.assertEqual(kinds(text), [("text", False), ("html", True), ("hr", True), ("text", False)])
+
+    def test_multi_line_definition_becomes_an_inline_link(self):
+        segments = split_markdown_blocks('See [the site][x].\n\n[x]:\n  https://example.com/a\n  "Home"')
+        self.assertEqual(segments[0].text, 'See [the site](<https://example.com/a> "Home").')
+
+    def test_setext_heading_is_one_block(self):
+        self.assertEqual(kinds("Title\n=====\n\nText."), [("heading", False), ("text", False)])
+
 
 if __name__ == "__main__":
     unittest.main()

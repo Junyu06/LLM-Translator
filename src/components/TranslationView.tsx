@@ -1,4 +1,5 @@
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import type { TranslationSegment } from "../types";
 
@@ -11,8 +12,11 @@ type Props = {
   emptyHint: string;
 };
 
+// Tables, strikethrough, task lists and autolinks, as on GitHub.
+const GFM = [remarkGfm];
+
 const Prose = ({ text, markdown }: { text: string; markdown: boolean }) =>
-  markdown ? <div className="markdown-body"><ReactMarkdown>{text}</ReactMarkdown></div> : <>{text}</>;
+  markdown ? <div className="markdown-body"><ReactMarkdown remarkPlugins={GFM}>{text}</ReactMarkdown></div> : <>{text}</>;
 
 // A paragraph still waiting for its translation.
 const Pending = () => <span className="pending" aria-hidden="true" />;
