@@ -293,12 +293,23 @@ def _indent(line: str) -> int:
     return len(expanded) - len(expanded.lstrip(" "))
 
 
+def _continues_item(indent: int, open_levels: List[int]) -> bool:
+    return any(level <= indent < level + 4 for level in open_levels)
+
+
+def _close_deeper(open_levels: List[int], indent: int) -> None:
+    while open_levels and open_levels[-1] > indent:
+        open_levels.pop()
+
+
 def _take_list(lines: List[str], start: int) -> tuple[List[str], int]:
     index = start
     block: List[str] = []
-    # Where the current item's text starts; a paragraph after a blank line
-    # indented this far still belongs to the item, four more makes it code.
-    content_indent = 2
+    # Where the text of each open item starts, outermost first. A paragraph
+    # after a blank line belongs to the list when it is indented to one of
+    # these levels (and less than four more, which would make it code). Going
+    # back to a shallower indent closes the deeper items.
+    open_levels: List[int] = []
 
     while index < len(lines):
         line = lines[index]
@@ -306,8 +317,10 @@ def _take_list(lines: List[str], start: int) -> tuple[List[str], int]:
         if _is_any_fence(line) or (block and _starts_item_with_code(line)):
             break
         marker = _ANY_LIST_MARKER_RE.match(line)
-        if marker and _indent(line) < content_indent + 4:
-            content_indent = marker.end("marker") + 1
+        # A marker indented four past the deepest item text is code, not an item.
+        if marker and (not open_levels or _indent(line) < open_levels[-1] + 4):
+            _close_deeper(open_levels, _indent(line))
+            open_levels.append(marker.end("marker") + 1)
             block.append(line)
             index += 1
             continue
@@ -322,8 +335,10 @@ def _take_list(lines: List[str], start: int) -> tuple[List[str], int]:
         if _is_blank(line) and index + 1 < len(lines):
             next_line = lines[index + 1]
             if _is_list_marker(next_line) or (
-                not _is_blank(next_line) and content_indent <= _indent(next_line) < content_indent + 4
+                not _is_blank(next_line) and _continues_item(_indent(next_line), open_levels)
             ):
+                if not _is_list_marker(next_line):
+                    _close_deeper(open_levels, _indent(next_line))
                 block.append(line)
                 index += 1
                 continue

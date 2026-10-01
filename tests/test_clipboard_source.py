@@ -33,6 +33,9 @@ class ClipboardSourceTests(unittest.TestCase):
         self.assertEqual(choose_source("https://example.com/image?id=7", has_image=True), "image")
         self.assertEqual(choose_source("https://cdn.example.com/a.png#preview", has_image=True), "image")
 
+    def test_short_text_with_a_colon_next_to_image_is_text(self) -> None:
+        self.assertEqual(choose_source("Note:see-attached", has_image=True), "text")
+
     def test_single_word_next_to_image_is_text(self) -> None:
         self.assertEqual(choose_source("Quarterly", has_image=True), "text")
 

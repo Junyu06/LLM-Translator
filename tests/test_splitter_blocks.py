@@ -131,6 +131,29 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         segments = split_markdown_blocks(text)
         self.assertEqual([(s.kind, s.protected) for s in segments], [("list", False)])
 
+    def test_parent_paragraph_after_a_nested_list_stays_with_its_item(self):
+        text = (
+            "- Install the app.\n"
+            "  - On macOS, drag it to Applications.\n"
+            "  - On Windows, run the installer.\n"
+            "\n"
+            "  Restart the app after installation.\n"
+            "\n"
+            "- Configure the model."
+        )
+        segments = split_markdown_blocks(text)
+        self.assertEqual([(s.kind, s.protected) for s in segments], [("list", False)])
+        self.assertIn("  Restart the app after installation.", segments[0].text)
+
+    def test_numbered_parent_paragraph_after_a_nested_list(self):
+        text = "1. Install.\n   - macOS\n   - Windows\n\n   Restart afterwards.\n2. Configure."
+        self.assertEqual([s.kind for s in split_markdown_blocks(text)], ["list"])
+
+    def test_code_after_a_later_item_is_not_taken_for_an_earlier_sub_item(self):
+        text = "- Install.\n  - macOS\n\n- Configure.\n\n1. Run:\n\n       npm run build\n\n2. Open."
+        kinds = [(s.kind, s.protected) for s in split_markdown_blocks(text)]
+        self.assertIn(("indented_code", True), kinds)
+
     def test_code_indented_past_the_item_text_is_protected(self):
         text = "1. Run:\n\n       npm run build\n\n2. Open the app."
         segments = split_markdown_blocks(text)

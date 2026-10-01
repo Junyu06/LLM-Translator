@@ -24,7 +24,7 @@ def _looks_like_image_reference(text: str) -> bool:
     stripped = text.strip()
     if not stripped or "\n" in stripped:
         return False
-    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:\S*$", stripped):
+    if re.match(r"^(?:[A-Za-z][A-Za-z0-9+.-]*://|data:image/)\S*$", stripped):
         return True
     path = re.split(r"[?#]", stripped, maxsplit=1)[0]
     return os.path.splitext(path)[1].lower() in _IMAGE_EXTENSIONS
