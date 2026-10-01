@@ -277,17 +277,22 @@ def _recording(rule, label_offset: int, disable_nested: bool, url_attr: str):
     return wrapped
 
 
-def _recording_code(state, silent):
-    start = state.pos
-    ok = rules_inline.backtick(state, silent)
-    if ok and not silent and getattr(_recorder, "spans", None) is not None:
-        _recorder.not_text.append((state.src, start, state.pos))
-    return ok
+def _not_text(rule):
+    """Record where a code span or an autolink sits: a URL there is not a bare URL."""
+    def wrapped(state, silent):
+        start = state.pos
+        ok = rule(state, silent)
+        if ok and not silent and getattr(_recorder, "spans", None) is not None:
+            _recorder.not_text.append((state.src, start, state.pos))
+        return ok
+
+    return wrapped
 
 
 _MD.inline.ruler.at("link", _recording(rules_inline.link, 0, True, "href"))
 _MD.inline.ruler.at("image", _recording(rules_inline.image, 1, False, "src"))
-_MD.inline.ruler.at("backticks", _recording_code)
+_MD.inline.ruler.at("backticks", _not_text(rules_inline.backtick))
+_MD.inline.ruler.at("autolink", _not_text(rules_inline.autolink))
 
 
 def _inside_bare_url(content: str, link_start: int, not_text: List[Tuple[int, int]]) -> bool:
@@ -328,6 +333,13 @@ def _content_line_starts(lines: List[str], first: int, content: str, cursors: di
             starts.append(None)
             continue
         line = lines[number]
+        if "\\|" in line:
+            # A table cell's content has `\|` unescaped, so it no longer matches
+            # its source and could match across cells. Leave such a line alone.
+            cursors[number] = len(line) + 1
+            starts.append(None)
+            offset += len(line) + 1
+            continue
         from_column = cursors.get(number, 0)
         suffix = len(line.rstrip()) - len(content_line)
         if line.rstrip().endswith(content_line) and suffix >= from_column and line.find(content_line, from_column) == suffix:

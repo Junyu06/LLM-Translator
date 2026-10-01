@@ -232,6 +232,12 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         self.assertEqual(split_markdown_blocks(url + defs)[0].text, url)
         self.assertEqual(split_markdown_blocks("word[site]" + defs)[0].text, "word[site](</target>)")
 
+    def test_codex_round_fifteen_link_cases(self):
+        defs = "\n\n[site]: /target"
+        table = "| a\\|b | [site] | a|b | `[site]` |\n|---|---|---|---|---|\n|1|2|3|4|5|" + defs
+        self.assertEqual(split_markdown_blocks(table)[0].text.splitlines()[0], "| a\\|b | [site] | a|b | `[site]` |")
+        self.assertEqual(split_markdown_blocks("<https://example.com>[site]" + defs)[0].text, "<https://example.com>[site](</target>)")
+
     def test_reference_inside_a_list_and_a_quote(self):
         text = "- See [the docs][site]\n  and [site].\n\n> Quote [site].\n\n[site]: https://e.example"
         segments = split_markdown_blocks(text)
