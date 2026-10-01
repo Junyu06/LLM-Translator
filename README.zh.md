@@ -82,8 +82,3 @@ npm run tauri:dev
 - OCR 依赖系统语言包
 - OCR 按 Vision 返回的顺序给出各行，多栏截图可能交错
 - 少数罕见写法里，引用式链接保持原样不改写：表格里带转义竖线 `\|` 的行、用 Tab 缩进的行，以及 CommonMark 和 GitHub 解析不一样的写法。在“只看译文”视图里这些链接照样能点
-
-## Roadmap
-
-- 翻译图片里的文字，并把译文贴回图上
-- 用 Vision 的 `RecognizeDocumentsRequest` 做带文档结构（段落、分栏）的 OCR
