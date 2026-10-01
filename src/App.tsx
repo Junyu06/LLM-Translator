@@ -1,13 +1,23 @@
 import { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+
+import HistoryDrawer from "./components/HistoryDrawer";
+import SettingsSheet, { type ModelList } from "./components/SettingsSheet";
+import TranslationView from "./components/TranslationView";
+import { LANGUAGES, languageName, translator, type StringKey } from "./i18n";
+import { IconClipboard, IconCollapse, IconCopy, IconExpand, IconHistory, IconLock, IconSettings, IconStop, IconSwap, IconTrash, IconUnlock } from "./icons";
 import {
   type DesktopBackendStatus,
   type HotkeyStatus,
+  cancelTranslation,
+  checkAccessibility,
+  checkInputMonitoring,
   getHotkeyStatus,
   isTauriRuntime,
+  listModels,
   loadInitialConfig,
   notifyFrontendReady,
   onHotkeyError,
+  openPrivacySettings,
   readClipboard,
   refreshBackendStatus,
   requestAccessibility,
@@ -17,147 +27,24 @@ import {
   syncHotkeyListener,
   takeTranslationEvents,
   translate,
-  cancelTranslation,
-  checkAccessibility,
-  checkInputMonitoring,
-  openPrivacySettings,
   writeClipboardText
 } from "./lib/api";
-import type { AppConfig, HistoryItem, TranslationRequest, TranslationResponse } from "./types";
-import { IconCollapse, IconCopy, IconExpand, IconHistory, IconLock, IconMagic, IconSearch, IconSettings, IconStop, IconSwap, IconTrash, IconUnlock, IconX } from "./icons";
+import { addHistoryItem, loadHistory, readStorage, saveHistory, writeStorage } from "./lib/history";
+import type { AppConfig, HistoryItem, TranslationEvent, TranslationRequest, TranslationSegment } from "./types";
 import "./styles.css";
 
 declare const __BUILD_PLATFORM__: "windows" | "macos" | "linux";
 
 const BUILD_PLATFORM = typeof __BUILD_PLATFORM__ === "string" ? __BUILD_PLATFORM__ : "linux";
 const IS_MAC_BUILD = BUILD_PLATFORM === "macos";
-const TRANSLATE_SHORTCUT = IS_MAC_BUILD ? "⌘+Enter" : "Ctrl+Enter";
+const TRANSLATE_SHORTCUT = IS_MAC_BUILD ? "⌘↩" : "Ctrl+Enter";
 const DOUBLE_COPY_SHORTCUT = IS_MAC_BUILD ? "⌘C ⌘C" : "Ctrl+C Ctrl+C";
+const PERMISSION_AUTO_REQUEST_KEY = "translator_permission_autorequest_v1";
+const POLL_INTERVAL_MS = 120;
 
-// --- i18n & Lang Mapping ---
-const LANG_MAP: Record<string, Record<string, string>> = {
-  en: { auto: "Detect", zh: "Chinese", en: "English", ja: "Japanese", ko: "Korean", fr: "French", de: "German", es: "Spanish", ru: "Russian" },
-  zh: { auto: "自动检测", zh: "中文", en: "英语", ja: "日语", ko: "韩语", fr: "法语", de: "德语", es: "西班牙语", ru: "俄语" }
-};
-
-const I18N = {
-  en: {
-    title: "Translator",
-    source: "Source",
-    translation: "Translation",
-    ready: "Ready",
-    done: "Done",
-    copied: "Copied",
-    clear: "Clear All",
-    settings: "Preferences",
-    history: "History",
-    engine: "AI Engine",
-    inference: "Inference Core",
-    model: "Model Name",
-    model_desc: "The specific LLM to use for translation.",
-    host: "Server Host",
-    host_desc: "Endpoint for the external service.",
-    style: "Interface & Style",
-    appearance: "Appearance",
-    font_size: "Font Size",
-    ui_lang: "UI Language",
-    features: "Capabilities",
-    bilingual: "Side-by-Side View",
-    bilingual_desc: "Show original and translated text together.",
-    context: "Smart Context",
-    context_desc: "Reference surroundings for coherence.",
-    hotkey: "Quick Translate",
-    hotkey_desc: "Trigger clipboard translation with double Copy.",
-    accessibility: "Accessibility",
-    accessibility_desc: "Required for the double-⌘C hotkey.",
-    grant_accessibility: "Grant Access",
-    accessibility_granted: "Granted",
-    input_monitoring: "Input Monitoring",
-    input_monitoring_desc: "Required for the double-⌘C hotkey.",
-    search: "Search history...",
-    empty_history: "No translations found.",
-    confirm_clear: "Purge all history?",
-    cancel: "Cancel",
-    placeholder: "Type, paste text or image...",
-    internal: "Internal",
-    external: "Ollama",
-    light: "Light",
-    dark: "Dark",
-    system: "System",
-    mode_normal: "Normal",
-    mode_markdown: "Markdown",
-    mode_markdown_desc: "Preserve Markdown structure during translation.",
-    reading_clipboard: "Reading clipboard…",
-    clipboard_empty: "Clipboard has no text or image",
-    clipboard_error: "Clipboard error",
-    ocr_no_text: "No text found in the image"
-  },
-  zh: {
-    title: "翻译器",
-    source: "原文",
-    translation: "译文",
-    ready: "就绪",
-    done: "完成",
-    copied: "已复制",
-    clear: "清空全部",
-    settings: "偏好设置",
-    history: "历史记录",
-    engine: "AI 引擎",
-    inference: "推理核心",
-    model: "模型名称",
-    model_desc: "用于翻译的具体大语言模型。",
-    host: "服务器地址",
-    host_desc: "外部服务的 API 端点。",
-    style: "界面与样式",
-    appearance: "外观主题",
-    font_size: "字体大小",
-    ui_lang: "界面语言",
-    features: "功能特性",
-    bilingual: "对照模式",
-    bilingual_desc: "同时显示原文和译文。",
-    context: "智能上下文",
-    context_desc: "参考上下文信息提升连贯性。",
-    hotkey: "快速翻译",
-    hotkey_desc: "双击复制快捷键触发剪贴板翻译。",
-    accessibility: "辅助功能",
-    accessibility_desc: "双击 ⌘C 快捷键需要此权限。",
-    grant_accessibility: "授予权限",
-    accessibility_granted: "已授权",
-    input_monitoring: "输入监控",
-    input_monitoring_desc: "双击 ⌘C 快捷键需要此权限。",
-    search: "搜索历史...",
-    empty_history: "暂无历史记录。",
-    confirm_clear: "确定清空所有记录？",
-    cancel: "取消",
-    placeholder: "输入、粘贴文本或图片...",
-    internal: "内置引擎",
-    external: "Ollama",
-    light: "亮色",
-    dark: "暗色",
-    system: "跟随系统",
-    mode_normal: "常规",
-    mode_markdown: "Markdown",
-    mode_markdown_desc: "翻译时保留 Markdown 结构并渲染。",
-    reading_clipboard: "正在读取剪贴板…",
-    clipboard_empty: "剪贴板里没有文字或图片",
-    clipboard_error: "读取剪贴板出错",
-    ocr_no_text: "图片里没有识别到文字"
-  }
-};
-
-// --- Types ---
-interface ExtendedConfig extends AppConfig {}
-const LANGUAGES = ["auto", "zh", "en", "ja", "ko", "fr", "de", "es", "ru"];
-
-const cleanText = (text: string | undefined | null) => {
-  if (!text) return "";
-  return text.toString().replace(/\n/g, " ");
-};
-
-const defaultConfig: ExtendedConfig = {
+const defaultConfig: AppConfig = {
   source_lang: "auto",
   target_lang: "zh",
-  use_context: false,
   collapse_newlines: false,
   output_mode: "translations_only",
   translation_mode: "normal",
@@ -172,245 +59,327 @@ const defaultConfig: ExtendedConfig = {
   ui_lang: "en"
 };
 
-const PERMISSION_AUTO_REQUEST_KEY = "translator_permission_autorequest_v1";
-const HISTORY_STORAGE_KEY = "translator_history_v2";
+type Status = { text: string; tone: "idle" | "busy" | "error" };
 
-const isHistoryItem = (value: unknown): value is HistoryItem => {
-  if (!value || typeof value !== "object") return false;
-  const item = value as Partial<HistoryItem>;
-  return (
-    typeof item.id === "string" &&
-    typeof item.source === "string" &&
-    typeof item.target === "string" &&
-    typeof item.timestamp === "number"
-  );
-};
+const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
-const backupBadStorageValue = (key: string, value: string) => {
-  try {
-    writeStorageItem(`${key}_corrupt_${Date.now()}`, value);
-    removeStorageItem(key);
-  } catch (error) {
-    console.error(error);
-  }
-};
-
-const readStorageItem = (key: string): string | null => {
-  try {
-    if (typeof localStorage === "undefined") return null;
-    return localStorage.getItem(key);
-  } catch (error) {
-    console.error(error);
-    return null;
-  }
-};
-
-const writeStorageItem = (key: string, value: string) => {
-  try {
-    if (typeof localStorage === "undefined") return;
-    localStorage.setItem(key, value);
-  } catch (error) {
-    console.error(error);
-  }
-};
-
-const removeStorageItem = (key: string) => {
-  try {
-    if (typeof localStorage === "undefined") return;
-    localStorage.removeItem(key);
-  } catch (error) {
-    console.error(error);
-  }
-};
-
-const loadHistoryFromStorage = (): HistoryItem[] => {
-  const saved = readStorageItem(HISTORY_STORAGE_KEY);
-  if (!saved) return [];
-
-  try {
-    const parsed = JSON.parse(saved);
-    if (Array.isArray(parsed) && parsed.every(isHistoryItem)) {
-      return parsed;
-    }
-  } catch (error) {
-    console.error(error);
-  }
-
-  backupBadStorageValue(HISTORY_STORAGE_KEY, saved);
-  return [];
-};
-
-const Toggle = ({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) => (
-  <label className="switch"><input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} /><span className="slider"></span></label>
-);
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export default function App() {
-  const [config, setConfig] = useState<ExtendedConfig>(defaultConfig);
+  const [config, setConfig] = useState<AppConfig>(defaultConfig);
   const [input, setInput] = useState("");
+  const [segments, setSegments] = useState<TranslationSegment[]>([]);
   const [output, setOutput] = useState("");
-  const [status, setStatus] = useState(I18N[defaultConfig.ui_lang]["ready"]);
+  const [detectedLang, setDetectedLang] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState({ completed: 0, total: 0 });
+  const [status, setStatus] = useState<Status>({ text: "", tone: "idle" });
   const [backendStatus, setBackendStatus] = useState<DesktopBackendStatus | null>(null);
   const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatus | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [progressRatio, setProgressRatio] = useState(0);
+  const [permissions, setPermissions] = useState({ accessibility: true, inputMonitoring: true });
   const [showSettings, setShowSettings] = useState(false);
-  const [isSizingFont, setIsSizingFont] = useState(false);
-  const [segments, setSegments] = useState<Array<{ source: string; target: string }>>([]);
   const [showHistory, setShowHistory] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [confirmClear, setConfirmClear] = useState(false);
   const [fullscreenPanel, setFullscreenPanel] = useState<null | "input" | "output">(null);
   const [scrollLocked, setScrollLocked] = useState(false);
-  const scrollLockedRef = useRef(false);
+  const [history, setHistory] = useState<HistoryItem[]>(() => loadHistory());
+  const [models, setModels] = useState<ModelList>({ models: [], error: null, loading: false });
+
+  // Each translation gets a run id. Anything that resolves after a newer run
+  // started, or after Stop/Clear, checks the id and drops its result.
+  const runIdRef = useRef(0);
+  const jobIdRef = useRef<number | null>(null);
+  const configRef = useRef(config);
   const inputScrollRef = useRef<HTMLTextAreaElement>(null);
   const outputScrollRef = useRef<HTMLDivElement>(null);
-  const syncedScrollTargetRef = useRef<HTMLElement | null>(null);
-  const scrollSyncReleaseRef = useRef<number | null>(null);
-  const [accessibilityGranted, setAccessibilityGranted] = useState(true);
-  const [inputMonitoringGranted, setInputMonitoringGranted] = useState(true);
-  const [history, setHistory] = useState<HistoryItem[]>(() => loadHistoryFromStorage());
-  
-  const currentJobIdRef = useRef<number | null>(null);
-  const inFlightRef = useRef(false);
-  const activeRunRef = useRef(0);
-  const statusRef = useRef(status);
-  const copyStatusTimeoutRef = useRef<number | null>(null);
-  const historyListRef = useRef<HTMLDivElement>(null);
-  const historyScrollRef = useRef(0);
+  const syncingScrollRef = useRef<HTMLElement | null>(null);
+  const statusTimerRef = useRef<number | null>(null);
   const permissionPollRef = useRef<number | null>(null);
-  const runTranslationRef = useRef<(text: string) => Promise<void>>(async () => {});
-  const captureClipboardIntoInputRef = useRef<(prefilledText?: string, autoTranslate?: boolean) => Promise<void>>(async () => {});
-  const t = (key: keyof typeof I18N.en) => I18N[config.ui_lang || "en"][key];
-  const langName = (code: string) => LANG_MAP[config.ui_lang || "en"][code] || code.toUpperCase();
-  const hotkeyDescription = config.ui_lang === "zh"
-    ? `${DOUBLE_COPY_SHORTCUT} 触发剪贴板翻译。`
-    : `${DOUBLE_COPY_SHORTCUT} triggers clipboard translation.`;
-  const backendStatusText = backendStatus
-    ? backendStatus.state === "running"
-      ? "Backend: running"
-      : `Backend: ${backendStatus.error || backendStatus.state}`
-    : null;
-  const hotkeyStatusText = hotkeyStatus
-    ? hotkeyStatus.error
-      ? `Hotkey: ${hotkeyStatus.state} (${hotkeyStatus.error})`
-      : `Hotkey: ${hotkeyStatus.state}`
-    : null;
-  const footerDetails = [config.model, config.mode === "local" ? t("internal") : t("external"), backendStatusText, hotkeyStatusText]
-    .filter(Boolean)
-    .join(" • ");
+  const captureRef = useRef<(prefilledText?: string) => Promise<void>>(async () => {});
 
-  const stopPermissionPolling = () => {
-    if (permissionPollRef.current !== null) {
-      window.clearInterval(permissionPollRef.current);
-      permissionPollRef.current = null;
+  configRef.current = config;
+  const t = translator(config.ui_lang);
+  const lang = (code: string) => languageName(config.ui_lang, code);
+
+  const showStatus = (text: string, tone: Status["tone"] = "idle", clearAfterMs?: number) => {
+    if (statusTimerRef.current !== null) window.clearTimeout(statusTimerRef.current);
+    statusTimerRef.current = null;
+    setStatus({ text, tone });
+    if (clearAfterMs) {
+      statusTimerRef.current = window.setTimeout(() => setStatus({ text: "", tone: "idle" }), clearAfterMs);
     }
   };
 
-  useEffect(() => {
-    statusRef.current = status;
-  }, [status]);
+  const describeFailure = (code: string | undefined, message: string) => {
+    const current = configRef.current;
+    const host = current.mode === "http" && current.host.trim() ? current.host.trim() : "127.0.0.1:11434";
+    const known: Record<string, string> = {
+      ollama_unavailable: t("err_unreachable", { host }),
+      model_not_found: t("err_model_missing", { model: current.model }),
+      backend_timeout: t("err_timeout"),
+      backend_stream_error: `${t("err_model_failed")}: ${message}`,
+      backend_stream_incomplete: t("err_model_failed"),
+      bridge_exited: t("err_process")
+    };
+    return (code && known[code]) || message;
+  };
 
-  const clearCopyStatusTimeout = () => {
-    if (copyStatusTimeoutRef.current !== null) {
-      window.clearTimeout(copyStatusTimeoutRef.current);
-      copyStatusTimeoutRef.current = null;
+  // ---------- translation ----------
+
+  const stopCurrentJob = () => {
+    const jobId = jobIdRef.current;
+    jobIdRef.current = null;
+    if (jobId !== null) void cancelTranslation(jobId);
+  };
+
+  const applyEvent = (event: TranslationEvent) => {
+    if (event.segments) setSegments(event.segments);
+    if (event.output_text !== undefined) setOutput(event.output_text);
+    if (event.detected_source_lang !== undefined) setDetectedLang(event.detected_source_lang);
+    if (event.total_segments !== undefined) {
+      setProgress({ completed: event.completed_segments ?? 0, total: event.total_segments });
     }
   };
 
-  const showCopiedStatus = () => {
-    const copiedLabel = t("copied");
-    clearCopyStatusTimeout();
-    setStatus(copiedLabel);
-    copyStatusTimeoutRef.current = window.setTimeout(() => {
-      copyStatusTimeoutRef.current = null;
-      if (!inFlightRef.current && statusRef.current === copiedLabel) {
-        setStatus(t("done"));
-      }
-    }, 2000);
-  };
-
-  const startPermissionPolling = (initialAccessibility: boolean, initialInputMonitoring: boolean) => {
-    stopPermissionPolling();
-
-    let lastAccessibility = initialAccessibility;
-    let lastInputMonitoring = initialInputMonitoring;
-    let syncedHotkey = false;
-    let attempts = 0;
-
-    const poll = async () => {
-      attempts += 1;
+  const followJob = async (jobId: number, runId: number, sourceText: string) => {
+    while (runIdRef.current === runId) {
+      let events: TranslationEvent[];
       try {
-        const [ax, im] = await Promise.all([checkAccessibility(), checkInputMonitoring()]);
-        setAccessibilityGranted(ax);
-        setInputMonitoringGranted(im);
-
-        if (ax && im && !syncedHotkey) {
-          syncedHotkey = true;
-          await syncHotkeyListener();
-        }
-
-        lastAccessibility = ax;
-        lastInputMonitoring = im;
-
-        if ((ax && im) || attempts >= 180) {
-          stopPermissionPolling();
-        }
+        events = await takeTranslationEvents<TranslationEvent>(jobId);
       } catch (error) {
-        console.error(error);
-        if (attempts >= 180) {
-          stopPermissionPolling();
+        if (runIdRef.current !== runId) return;
+        setRunning(false);
+        showStatus(errorText(error), "error");
+        return;
+      }
+      if (runIdRef.current !== runId) return;
+
+      for (const event of events) {
+        applyEvent(event);
+        if (event.event === "completed") {
+          jobIdRef.current = null;
+          setRunning(false);
+          showStatus(t("done"), "idle", 2500);
+          setHistory((prev) => addHistoryItem(prev, sourceText, event.output_text ?? "", event.segments ?? []));
+          return;
+        }
+        if (event.event === "error") {
+          jobIdRef.current = null;
+          setRunning(false);
+          showStatus(describeFailure(event.code, event.message ?? "Translation failed"), "error");
+          return;
+        }
+        if (event.event === "canceled") {
+          jobIdRef.current = null;
+          setRunning(false);
+          return;
         }
       }
+      await sleep(POLL_INTERVAL_MS);
+    }
+  };
+
+  const runTranslation = async (text: string) => {
+    if (!text.trim()) return;
+    // A new request replaces whatever is still running.
+    const runId = runIdRef.current + 1;
+    runIdRef.current = runId;
+    stopCurrentJob();
+
+    const current = configRef.current;
+    setInput(text);
+    setSegments([]);
+    setOutput("");
+    setDetectedLang(null);
+    setProgress({ completed: 0, total: 0 });
+    setRunning(true);
+    showStatus(t("translating"), "busy");
+
+    const request: TranslationRequest = {
+      text,
+      source_lang: current.source_lang,
+      target_lang: current.target_lang,
+      collapse_newlines: current.collapse_newlines,
+      // Side-by-side is drawn from segments, so switching views never needs a new request.
+      output_mode: "translations_only",
+      translation_mode: current.translation_mode,
+      mode: current.mode,
+      host: current.host,
+      model: current.model
     };
 
-    void poll();
-    permissionPollRef.current = window.setInterval(() => {
-      void poll();
+    if (isTauriRuntime()) {
+      let jobId: number;
+      try {
+        jobId = await startTranslationStream(request);
+      } catch (error) {
+        if (runIdRef.current !== runId) return;
+        setRunning(false);
+        showStatus(errorText(error), "error");
+        return;
+      }
+      if (runIdRef.current !== runId) {
+        void cancelTranslation(jobId);
+        return;
+      }
+      jobIdRef.current = jobId;
+      await followJob(jobId, runId, text);
+      return;
+    }
+
+    // Browser development: no streaming.
+    try {
+      const response = await translate(request);
+      if (runIdRef.current !== runId) return;
+      const done = response.segments.map((segment) => ({ ...segment, done: true }));
+      setSegments(done);
+      setOutput(response.output_text);
+      setDetectedLang(response.detected_source_lang);
+      setHistory((prev) => addHistoryItem(prev, text, response.output_text, done));
+      showStatus(t("done"), "idle", 2500);
+    } catch (error) {
+      if (runIdRef.current === runId) showStatus(errorText(error), "error");
+    } finally {
+      if (runIdRef.current === runId) setRunning(false);
+    }
+  };
+
+  const stopTranslation = () => {
+    runIdRef.current += 1;
+    stopCurrentJob();
+    setRunning(false);
+    showStatus(t("stopped"), "idle", 2500);
+  };
+
+  const clearAll = () => {
+    runIdRef.current += 1;
+    stopCurrentJob();
+    setRunning(false);
+    setInput("");
+    setSegments([]);
+    setOutput("");
+    setDetectedLang(null);
+    showStatus("");
+  };
+
+  const openHistoryItem = (item: HistoryItem) => {
+    runIdRef.current += 1;
+    stopCurrentJob();
+    setRunning(false);
+    setInput(item.source);
+    setSegments(item.segments ?? []);
+    setOutput(item.target);
+    setDetectedLang(null);
+    showStatus("");
+  };
+
+  // Clipboard button, double-copy hotkey and tray menu all land here. Text is
+  // used as-is; an image comes back as OCR text.
+  captureRef.current = async (prefilledText?: string) => {
+    let text = prefilledText?.trim() ? prefilledText : "";
+    let source: "text" | "image" | "empty" = text ? "text" : "empty";
+    if (!text) {
+      showStatus(t("reading_clipboard"), "busy");
+      // Right after a double copy the source app may still be writing the clipboard.
+      for (let attempt = 0; attempt < 3 && source === "empty"; attempt += 1) {
+        if (attempt > 0) await sleep(80);
+        try {
+          const capture = await readClipboard();
+          source = capture.source;
+          text = capture.text;
+        } catch (error) {
+          showStatus(`${t("clipboard_error")}: ${errorText(error)}`, "error");
+          return;
+        }
+      }
+    }
+    if (!text.trim()) {
+      showStatus(source === "image" ? t("ocr_no_text") : t("clipboard_empty"), "error", 4000);
+      return;
+    }
+    await runTranslation(text);
+  };
+
+  // Pasting an image runs the same capture: OCR, then translate.
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData?.items ?? []);
+    if (!items.some((item) => item.type.startsWith("image/"))) return;
+    e.preventDefault();
+    void captureRef.current();
+  };
+
+  // ---------- config ----------
+
+  const updateConfig = (patch: Partial<AppConfig>) => {
+    configRef.current = { ...configRef.current, ...patch };
+    setConfig((prev) => ({ ...prev, ...patch }));
+    if (patch.theme) document.body.setAttribute("data-theme", patch.theme);
+    void saveConfig(patch).catch((error) => console.error(error));
+  };
+
+  const refreshModels = async () => {
+    setModels((prev) => ({ ...prev, loading: true }));
+    try {
+      const names = await listModels(configRef.current);
+      setModels({ models: names, error: null, loading: false });
+    } catch (error) {
+      setModels({ models: [], error: errorText(error), loading: false });
+    }
+  };
+
+  const swapLanguages = () => {
+    updateConfig({ source_lang: config.target_lang, target_lang: config.source_lang });
+    if (output.trim()) {
+      runIdRef.current += 1;
+      stopCurrentJob();
+      setRunning(false);
+      setInput(output);
+      setSegments([]);
+      setOutput("");
+    }
+  };
+
+  // ---------- permissions (macOS) ----------
+
+  const recheckPermissions = async () => {
+    const [accessibility, inputMonitoring] = await Promise.all([checkAccessibility(), checkInputMonitoring()]);
+    setPermissions({ accessibility, inputMonitoring });
+    if (accessibility && inputMonitoring) await syncHotkeyListener();
+    return accessibility && inputMonitoring;
+  };
+
+  const startPermissionPolling = () => {
+    if (permissionPollRef.current !== null) window.clearInterval(permissionPollRef.current);
+    let attempts = 0;
+    permissionPollRef.current = window.setInterval(async () => {
+      attempts += 1;
+      const granted = await recheckPermissions().catch(() => false);
+      if ((granted || attempts >= 180) && permissionPollRef.current !== null) {
+        window.clearInterval(permissionPollRef.current);
+        permissionPollRef.current = null;
+      }
     }, 1000);
   };
 
   const initializeMacPermissions = async () => {
-    if (!isTauriRuntime()) return;
-
-    const [ax, im] = await Promise.all([checkAccessibility(), checkInputMonitoring()]);
-    setAccessibilityGranted(ax);
-    setInputMonitoringGranted(im);
-
-    if (ax && im) {
-      await syncHotkeyListener();
-      return;
+    if (await recheckPermissions()) return;
+    if (readStorage(PERMISSION_AUTO_REQUEST_KEY) !== "1") {
+      writeStorage(PERMISSION_AUTO_REQUEST_KEY, "1");
+      await requestAccessibility().catch((error) => console.error(error));
+      await requestInputMonitoring().catch((error) => console.error(error));
     }
-
-    const hasAutoRequested = localStorage.getItem(PERMISSION_AUTO_REQUEST_KEY) === "1";
-    if (!hasAutoRequested) {
-      localStorage.setItem(PERMISSION_AUTO_REQUEST_KEY, "1");
-
-      if (!ax) {
-        try {
-          await requestAccessibility();
-        } catch (error) {
-          console.error(error);
-        }
-      }
-
-      if (!im) {
-        try {
-          await requestInputMonitoring();
-        } catch (error) {
-          console.error(error);
-        }
-      }
-    }
-
-    startPermissionPolling(ax, im);
+    startPermissionPolling();
   };
 
-  // Hotkey bridge: Rust evals window.__translatorTriggerClipboardTranslation(text)
+  // ---------- startup ----------
+
+  // Rust calls window.__translatorTriggerClipboardTranslation(text) for the hotkey and tray menu.
   useEffect(() => {
     (globalThis as any).__translatorTriggerClipboardTranslation = (text?: string) => {
-      void captureClipboardIntoInputRef.current(text, true);
+      void captureRef.current(text);
     };
-    return () => { delete (globalThis as any).__translatorTriggerClipboardTranslation; };
+    return () => {
+      delete (globalThis as any).__translatorTriggerClipboardTranslation;
+    };
   }, []);
 
   useEffect(() => {
@@ -418,535 +387,232 @@ export default function App() {
     let unlistenHotkeyError: (() => void) | null = null;
 
     if (isTauriRuntime()) {
-      void notifyFrontendReady().catch((error) => {
-        console.error(error);
-        if (!canceled) {
-          setStatus(`Frontend ready: ${error instanceof Error ? error.message : "failed"}`);
-        }
-      });
+      void notifyFrontendReady().catch((error) => console.error(error));
       void onHotkeyError((message) => {
-        if (!canceled) {
-          setHotkeyStatus({ state: "error", error: message });
-        }
+        if (!canceled) setHotkeyStatus({ state: "error", error: message });
       }).then((unlisten) => {
-        if (canceled) {
-          unlisten();
-          return;
-        }
-        unlistenHotkeyError = unlisten;
-      }).catch((error) => {
-        console.error(error);
+        if (canceled) unlisten();
+        else unlistenHotkeyError = unlisten;
       });
     }
 
-    const refreshRuntimeStatus = async () => {
-      const [backend, hotkey] = await Promise.all([refreshBackendStatus(), getHotkeyStatus()]);
-      if (canceled) return;
-      setBackendStatus(backend);
-      setHotkeyStatus(hotkey);
-    };
-
-    void loadInitialConfig().then(({ config: savedConfig, desktopStatus }) => {
-      if (canceled) return;
-      const merged = { ...defaultConfig, ...savedConfig };
-      setConfig(merged);
-      setStatus(I18N[merged.ui_lang || "en"]["ready"]);
-      setBackendStatus(desktopStatus);
-      document.body.setAttribute("data-theme", merged.theme || "system");
-      if (isTauriRuntime()) {
-        if (IS_MAC_BUILD) {
-          void initializeMacPermissions();
-        } else {
-          setAccessibilityGranted(true);
-          setInputMonitoringGranted(true);
-        }
-      }
-    }).catch((err) => {
-      if (canceled) return;
-      setStatus(`Config: ${err instanceof Error ? err.message : "default settings loaded"}`);
-      document.body.setAttribute("data-theme", defaultConfig.theme);
-    }).finally(() => {
-      void refreshRuntimeStatus().catch((error) => {
-        console.error(error);
-        if (!canceled) {
-          setBackendStatus({
-            state: "stopped",
-            python: null,
-            error: error instanceof Error ? error.message : "Backend status refresh failed."
-          });
-        }
+    void loadInitialConfig()
+      .then(({ config: saved }) => {
+        if (canceled) return;
+        const merged = { ...defaultConfig, ...saved };
+        configRef.current = merged;
+        setConfig(merged);
+        document.body.setAttribute("data-theme", merged.theme || "system");
+        if (isTauriRuntime() && IS_MAC_BUILD) void initializeMacPermissions();
+      })
+      .catch((error) => {
+        if (canceled) return;
+        document.body.setAttribute("data-theme", defaultConfig.theme);
+        showStatus(errorText(error), "error");
+      })
+      .finally(() => {
+        void Promise.all([refreshBackendStatus(), getHotkeyStatus()])
+          .then(([backend, hotkey]) => {
+            if (canceled) return;
+            setBackendStatus(backend);
+            setHotkeyStatus(hotkey);
+          })
+          .catch((error) => console.error(error));
       });
-    });
 
     return () => {
       canceled = true;
-      if (unlistenHotkeyError) {
-        unlistenHotkeyError();
-      }
-      stopPermissionPolling();
-      clearCopyStatusTimeout();
+      unlistenHotkeyError?.();
+      if (permissionPollRef.current !== null) window.clearInterval(permissionPollRef.current);
+      if (statusTimerRef.current !== null) window.clearTimeout(statusTimerRef.current);
     };
   }, []);
 
-  useEffect(() => { writeStorageItem(HISTORY_STORAGE_KEY, JSON.stringify(history)); }, [history]);
-
-  const releaseScrollSyncLock = () => {
-    if (scrollSyncReleaseRef.current !== null) {
-      window.clearTimeout(scrollSyncReleaseRef.current);
-      scrollSyncReleaseRef.current = null;
-    }
-    syncedScrollTargetRef.current = null;
-  };
-
-  const handleScrollSync = (source: HTMLElement, target: HTMLElement) => {
-    if (!scrollLockedRef.current) return;
-    if (syncedScrollTargetRef.current === source) return;
-
-    const sourceMaxScroll = Math.max(source.scrollHeight - source.clientHeight, 0);
-    const targetMaxScroll = Math.max(target.scrollHeight - target.clientHeight, 0);
-    const progress = sourceMaxScroll === 0 ? 0 : source.scrollTop / sourceMaxScroll;
-    const nextTargetScrollTop = progress * targetMaxScroll;
-
-    syncedScrollTargetRef.current = target;
-    target.scrollTop = nextTargetScrollTop;
-
-    if (scrollSyncReleaseRef.current !== null) {
-      window.clearTimeout(scrollSyncReleaseRef.current);
-    }
-    scrollSyncReleaseRef.current = window.setTimeout(() => {
-      syncedScrollTargetRef.current = null;
-      scrollSyncReleaseRef.current = null;
-    }, 80);
-  };
+  useEffect(() => saveHistory(history), [history]);
 
   useEffect(() => {
     if (isTauriRuntime() && IS_MAC_BUILD) void syncHotkeyListener();
   }, [config.hotkey_enabled]);
 
-  useEffect(() => releaseScrollSyncLock, []);
-
   useEffect(() => {
-    if (showHistory && historyListRef.current) {
-      historyListRef.current.scrollTop = historyScrollRef.current;
-    }
-  }, [showHistory]);
+    if (showSettings) void refreshModels();
+  }, [showSettings]);
 
-  const closeHistory = () => {
-    if (historyListRef.current) historyScrollRef.current = historyListRef.current.scrollTop;
-    setShowHistory(false);
-    setConfirmClear(false);
+  // ---------- scroll sync ----------
+
+  const syncScroll = (source: HTMLElement, target: HTMLElement | null) => {
+    if (!scrollLocked || !target || syncingScrollRef.current === source) return;
+    const sourceMax = Math.max(source.scrollHeight - source.clientHeight, 0);
+    const targetMax = Math.max(target.scrollHeight - target.clientHeight, 0);
+    syncingScrollRef.current = target;
+    target.scrollTop = sourceMax === 0 ? 0 : (source.scrollTop / sourceMax) * targetMax;
+    window.setTimeout(() => {
+      if (syncingScrollRef.current === target) syncingScrollRef.current = null;
+    }, 80);
   };
 
-  const addToHistory = (source: string, target: string) => {
-    if (!source.trim() || !target.trim()) return;
-    const newItem: HistoryItem = { id: Math.random().toString(36).substring(2, 9), source: source.trim(), target: target.trim(), timestamp: Date.now() };
-    setHistory(prev => [newItem, ...prev.filter(i => i.source !== source.trim()).slice(0, 99)]);
-  };
+  // ---------- render ----------
 
-  const runTranslation = async (text: string) => {
-    if (!text.trim() || inFlightRef.current) return;
-    const runId = activeRunRef.current + 1;
-    activeRunRef.current = runId;
-    inFlightRef.current = true;
-    setInput(text); setOutput(""); setSegments([]); setIsSubmitting(true); setProgressRatio(0);
-    const request: TranslationRequest = {
-      text,
-      source_lang: config.source_lang,
-      target_lang: config.target_lang,
-      use_context: config.use_context,
-      collapse_newlines: config.collapse_newlines,
-      output_mode: config.output_mode,
-      translation_mode: config.translation_mode,
-      mode: config.mode,
-      host: config.host,
-      model: config.model,
-    };
-    if (isTauriRuntime()) {
-      try {
-        const jobId = await startTranslationStream(request);
-        currentJobIdRef.current = jobId;
-        void pollProgress(jobId, text, runId);
-        return;
-      } catch (err) { console.error(err); }
-    }
+  const bilingual = config.output_mode === "interleaved";
+  const markdown = config.translation_mode === "markdown";
+  const sourceLabel = config.source_lang === "auto" && detectedLang
+    ? `${lang(detectedLang)} · ${t("detected")}`
+    : lang(config.source_lang);
+  const problems = [
+    backendStatus && backendStatus.state !== "running" ? `${t("backend_problem")}: ${backendStatus.error ?? backendStatus.state}` : null,
+    hotkeyStatus?.state === "error" ? `${t("hotkey_problem")}: ${hotkeyStatus.error ?? ""}` : null
+  ].filter(Boolean) as string[];
+  const progressRatio = progress.total ? (progress.completed / progress.total) * 100 : 0;
+
+  const copyOutput = async () => {
     try {
-      const resp = await translate(request);
-      setOutput(resp.output_text); 
-      if (resp.segments) setSegments(resp.segments);
-      addToHistory(text, resp.output_text); 
-      setStatus(t("done"));
-    } catch (err: any) { setStatus(`Error: ${err.message}`); } finally {
-      if (activeRunRef.current === runId) {
-        inFlightRef.current = false;
-        setIsSubmitting(false);
-        setProgressRatio(100);
-      }
+      await writeClipboardText(output);
+      showStatus(t("copied"), "idle", 2000);
+    } catch (error) {
+      showStatus(errorText(error), "error");
     }
   };
 
-  runTranslationRef.current = runTranslation;
-  captureClipboardIntoInputRef.current = async (prefilledText?: string, autoTranslate = false) => {
-    let text = prefilledText?.trim() ? prefilledText : "";
-    let source: "text" | "image" | "empty" = text ? "text" : "empty";
-    if (!text) {
-      setStatus(t("reading_clipboard"));
-      // Right after a double copy the source app may still be writing the clipboard.
-      for (let attempt = 0; attempt < 3 && source === "empty"; attempt += 1) {
-        if (attempt > 0) await new Promise((resolve) => window.setTimeout(resolve, 80));
-        try {
-          const capture = await readClipboard();
-          source = capture.source;
-          text = capture.text;
-        } catch (err: any) {
-          setStatus(`${t("clipboard_error")}: ${err?.message || err}`);
-          return;
-        }
-      }
-    }
-    if (!text.trim()) {
-      setStatus(source === "image" ? t("ocr_no_text") : t("clipboard_empty"));
-      return;
-    }
-    setInput(text);
-    setOutput("");
-    setSegments([]);
-    setStatus(t("ready"));
-
-    if (autoTranslate) {
-      await runTranslationRef.current(text);
-    }
-  };
-  const pollProgress = async (jobId: number, sourceText: string, runId: number) => {
-    let finalOutput = "";
-    let doneSegs: { source: string; target: string }[] = [];
-    try {
-      while (currentJobIdRef.current === jobId) {
-        const events = await takeTranslationEvents<any>(jobId);
-        for (const ev of events) {
-          if (ev.event === "update" || ev.event === "completed") {
-            if (ev.output_text) { setOutput(ev.output_text); finalOutput = ev.output_text; }
-            if (ev.total_segments) setProgressRatio((ev.completed_segments / ev.total_segments) * 100);
-            // Real-time bilingual segment tracking
-            if (ev.active_segment_source) {
-              const status = ev.segment_status;
-              if (status === "completed" || status === "passthrough") {
-                doneSegs = [...doneSegs, { source: ev.active_segment_source, target: ev.active_segment_target }];
-                setSegments(doneSegs);
-              } else if (status === "streaming") {
-                setSegments([...doneSegs, { source: ev.active_segment_source, target: ev.active_segment_target }]);
-              }
-            }
-          }
-          if (ev.event === "completed") { setIsSubmitting(false); inFlightRef.current = false; currentJobIdRef.current = null; setStatus(t("done")); addToHistory(sourceText, finalOutput); }
-          if (ev.event === "error" || ev.event === "canceled") { setIsSubmitting(false); inFlightRef.current = false; currentJobIdRef.current = null; setStatus(ev.message || "Failed"); }
-        }
-        await new Promise(r => setTimeout(r, 150));
-      }
-    } catch (err: any) {
-      if (currentJobIdRef.current === jobId) {
-        setStatus(`Error: ${err?.message || "Polling failed"}`);
-      }
-    } finally {
-      if (activeRunRef.current === runId && currentJobIdRef.current === jobId) {
-        currentJobIdRef.current = null;
-      }
-      if (activeRunRef.current === runId && currentJobIdRef.current === null) {
-        inFlightRef.current = false;
-        setIsSubmitting(false);
-      }
-    }
-  };
-
-  const stopTranslation = () => {
-    const jobId = currentJobIdRef.current;
-    activeRunRef.current += 1;
-    currentJobIdRef.current = null;
-    inFlightRef.current = false;
-    setIsSubmitting(false);
-    setStatus("Stopped");
-    if (jobId !== null) void cancelTranslation(jobId);
-  };
-
-  const updateConfig = (patch: Partial<ExtendedConfig>) => {
-    setConfig(prev => ({ ...prev, ...patch }));
-    if (patch.theme) document.body.setAttribute("data-theme", patch.theme);
-    void saveConfig(patch as any).catch((error) => {
-      console.error(error);
-    });
-  };
-
-  const filteredHistory = (history || []).filter(i => {
-    if (!i || !i.source || !i.target) return false;
-    const term = (searchTerm || "").toLowerCase();
-    return i.source.toLowerCase().includes(term) || i.target.toLowerCase().includes(term);
-  });
-
-  // Pasting an image runs the same capture as the clipboard button: OCR, then translate.
-  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const items = Array.from(e.clipboardData?.items ?? []);
-    if (!items.some((item) => item.type.startsWith("image/"))) return;
-    e.preventDefault();
-    void captureClipboardIntoInputRef.current(undefined, true);
-  };
+  const iconButton = (label: StringKey, onClick: () => void, icon: JSX.Element, extra?: { disabled?: boolean; active?: boolean }) => (
+    <button
+      className={`icon-btn${extra?.active ? " active" : ""}`}
+      onClick={onClick}
+      title={t(label)}
+      aria-label={t(label)}
+      disabled={extra?.disabled}
+    >
+      {icon}
+    </button>
+  );
 
   return (
     <div className="app-container" style={{ fontSize: `${config.font_size}px` }}>
       <nav className="app-nav">
-        <div className="nav-brand">{t("title")}</div>
+        <div className="segmented-control" role="group">
+          <button className={`segment-btn ${!markdown ? "active" : ""}`} onClick={() => updateConfig({ translation_mode: "normal" })}>{t("mode_normal")}</button>
+          <button className={`segment-btn ${markdown ? "active" : ""}`} onClick={() => updateConfig({ translation_mode: "markdown" })} title={t("mode_markdown_desc")}>{t("mode_markdown")}</button>
+        </div>
+
         <div className="lang-switcher">
-          <select className="lang-select" value={config.source_lang} onChange={e => updateConfig({ source_lang: e.target.value })}>
-            {LANGUAGES.map(l => <option key={l} value={l}>{langName(l)}</option>)}
+          <select className="lang-select" value={config.source_lang} onChange={(e) => updateConfig({ source_lang: e.target.value })}>
+            {LANGUAGES.map((code) => <option key={code} value={code}>{lang(code)}</option>)}
           </select>
-          <button className="icon-btn" onClick={() => { updateConfig({ source_lang: config.target_lang, target_lang: config.source_lang }); setInput(output); setOutput(input); setSegments([]); }} disabled={config.source_lang === "auto"}><IconSwap /></button>
-          <select className="lang-select" value={config.target_lang} onChange={e => updateConfig({ target_lang: e.target.value })}>
-            {LANGUAGES.filter(l => l !== "auto").map(l => <option key={l} value={l}>{langName(l)}</option>)}
+          {iconButton("swap", swapLanguages, <IconSwap />, { disabled: config.source_lang === "auto" })}
+          <select className="lang-select" value={config.target_lang} onChange={(e) => updateConfig({ target_lang: e.target.value })}>
+            {LANGUAGES.filter((code) => code !== "auto").map((code) => <option key={code} value={code}>{lang(code)}</option>)}
           </select>
         </div>
+
         <div className="nav-right">
-          <div className="mode-switcher">
-            <button className={`mode-btn ${config.translation_mode === "normal" ? "active" : ""}`} onClick={() => updateConfig({ translation_mode: "normal" })} title={t("mode_normal")}>{t("mode_normal")}</button>
-            <button className={`mode-btn ${config.translation_mode === "markdown" ? "active" : ""}`} onClick={() => updateConfig({ translation_mode: "markdown" })} title={t("mode_markdown_desc")}>{t("mode_markdown")}</button>
+          <div className="segmented-control" role="group">
+            <button className={`segment-btn ${!bilingual ? "active" : ""}`} onClick={() => updateConfig({ output_mode: "translations_only" })}>{t("view_translation")}</button>
+            <button className={`segment-btn ${bilingual ? "active" : ""}`} onClick={() => updateConfig({ output_mode: "interleaved" })} title={t("view_bilingual_desc")}>{t("view_bilingual")}</button>
           </div>
-          <div className="nav-actions">
-            <button className="icon-btn" onClick={() => setShowHistory(true)} title={t("history")}><IconHistory /></button>
-            <button className="icon-btn" onClick={async () => { setShowSettings(true); const [ax, im] = await Promise.all([checkAccessibility(), checkInputMonitoring()]); setAccessibilityGranted(ax); setInputMonitoringGranted(im); }} title={t("settings")}><IconSettings /></button>
-          </div>
+          {iconButton("history", () => setShowHistory(true), <IconHistory />)}
+          {iconButton("settings", () => setShowSettings(true), <IconSettings />)}
         </div>
       </nav>
 
       <main className={`main-workspace${fullscreenPanel ? " fullscreen" : ""}`}>
         <section className={`editor-panel${fullscreenPanel === "output" ? " panel-hidden" : ""}`}>
           <div className="panel-header">
-            <span className="panel-label">{t("source")}</span>
-            <div style={{ display: "flex", gap: 4 }}>
-              <button className="icon-btn" onClick={() => setFullscreenPanel(fullscreenPanel === "input" ? null : "input")} title={fullscreenPanel === "input" ? "Exit fullscreen" : "Fullscreen"}>{fullscreenPanel === "input" ? <IconCollapse /> : <IconExpand />}</button>
-              <button className="icon-btn" onClick={() => { setInput(""); setOutput(""); }}><IconTrash /></button>
+            <span className="panel-label">{sourceLabel}</span>
+            <div className="row-actions">
+              {fullscreenPanel === "input"
+                ? iconButton("exit_fullscreen", () => setFullscreenPanel(null), <IconCollapse />)
+                : iconButton("fullscreen", () => setFullscreenPanel("input"), <IconExpand />)}
+              {iconButton("clear", clearAll, <IconTrash />, { disabled: !input && !output })}
             </div>
           </div>
-          <div className="editor-content">
-            <textarea ref={inputScrollRef} placeholder={t("placeholder")} value={input} onChange={e => setInput(e.target.value)} onScroll={e => { if (outputScrollRef.current) handleScrollSync(e.currentTarget, outputScrollRef.current); }} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runTranslation(input); }} onPaste={handlePaste} />
+          <textarea
+            ref={inputScrollRef}
+            className="source-text"
+            placeholder={t("source_placeholder", { shortcut: TRANSLATE_SHORTCUT })}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onScroll={(e) => syncScroll(e.currentTarget, outputScrollRef.current)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void runTranslation(input);
+            }}
+            onPaste={handlePaste}
+          />
+          <div className="panel-footer">
+            <button className="secondary-btn" onClick={() => void captureRef.current()} title={t("from_clipboard_desc")}>
+              <IconClipboard />
+              <span>{t("from_clipboard")}</span>
+            </button>
+            {running ? (
+              <button className="primary-btn stop-btn" onClick={stopTranslation}>
+                <IconStop />
+                <span>{t("stop")}</span>
+              </button>
+            ) : (
+              <button className="primary-btn" disabled={!input.trim()} onClick={() => void runTranslation(input)}>
+                <span>{t("translate")}</span>
+                <kbd>{TRANSLATE_SHORTCUT}</kbd>
+              </button>
+            )}
           </div>
         </section>
+
         <section className={`editor-panel${fullscreenPanel === "input" ? " panel-hidden" : ""}`}>
-          {isSubmitting && <div className="progress-container"><div className="progress-bar" style={{ width: `${progressRatio}%` }} /></div>}
+          {running && <div className="progress-container"><div className="progress-bar" style={{ width: `${Math.max(progressRatio, 4)}%` }} /></div>}
           <div className="panel-header">
-            <span className="panel-label">{t("translation")}</span>
-            <div style={{ display: "flex", gap: 4 }}>
-              <button className="icon-btn" onMouseDown={e => e.preventDefault()} onClick={() => { const next = !scrollLockedRef.current; scrollLockedRef.current = next; setScrollLocked(next); }} title={scrollLocked ? "Unlock scroll" : "Lock scroll sync"} style={scrollLocked ? { color: "var(--bg-accent)" } : undefined}>{scrollLocked ? <IconLock /> : <IconUnlock />}</button>
-              <button className="icon-btn" onClick={() => setFullscreenPanel(fullscreenPanel === "output" ? null : "output")} title={fullscreenPanel === "output" ? "Exit fullscreen" : "Fullscreen"}>{fullscreenPanel === "output" ? <IconCollapse /> : <IconExpand />}</button>
-              <button className="icon-btn" onClick={async () => { try { await writeClipboardText(output); showCopiedStatus(); } catch (err: any) { setStatus(`Copy Error: ${err.message}`); } }} disabled={!output}><IconCopy /></button>
+            <span className="panel-label">{lang(config.target_lang)}</span>
+            <div className="row-actions">
+              {iconButton(scrollLocked ? "unlock_scroll" : "lock_scroll", () => setScrollLocked(!scrollLocked), scrollLocked ? <IconLock /> : <IconUnlock />, { active: scrollLocked })}
+              {fullscreenPanel === "output"
+                ? iconButton("exit_fullscreen", () => setFullscreenPanel(null), <IconCollapse />)
+                : iconButton("fullscreen", () => setFullscreenPanel("output"), <IconExpand />)}
+              {iconButton("copy", copyOutput, <IconCopy />, { disabled: !output })}
             </div>
           </div>
-          <div ref={outputScrollRef} className="editor-content output-content" onScroll={e => { if (inputScrollRef.current) handleScrollSync(e.currentTarget, inputScrollRef.current); }}>
-            {config.output_mode === "interleaved" && segments.length > 0 ? (
-              <div className="bilingual-viewer">
-                {segments.map((seg, i) => (
-                  <div key={i} className="bilingual-segment">
-                    <div className="segment-source">{seg.source}</div>
-                    <div className="segment-target">
-                      {config.translation_mode === "markdown" ? (
-                        <div className="markdown-body"><ReactMarkdown>{seg.target}</ReactMarkdown></div>
-                      ) : seg.target}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              config.translation_mode === "markdown" && output ? (
-                <div className="markdown-body"><ReactMarkdown>{output}</ReactMarkdown></div>
-              ) : (
-                output || <span style={{ color: "var(--fg-subtle)" }}>{t("ready")}...</span>
-              )
-            )}
+          <div ref={outputScrollRef} className="output-content" onScroll={(e) => syncScroll(e.currentTarget, inputScrollRef.current)}>
+            <TranslationView
+              segments={segments}
+              outputText={output}
+              bilingual={bilingual}
+              markdown={markdown}
+              running={running}
+              emptyHint={t("output_empty", { shortcut: DOUBLE_COPY_SHORTCUT })}
+            />
           </div>
         </section>
       </main>
 
-      <div className="floating-toolbar">
-        <button className="icon-btn" onClick={() => { void captureClipboardIntoInputRef.current(undefined, true); }}><IconMagic /></button>
-        <div style={{ width: 1, alignSelf: "stretch", background: "var(--border-medium)", margin: "4px 0" }} />
-        {isSubmitting ? (
-          <button className="primary-btn stop-btn" onClick={stopTranslation}>
-            <IconStop />
-            <span>Stop</span>
-          </button>
-        ) : (
-          <button className="primary-btn" disabled={!input.trim()} onClick={() => runTranslation(input)}>
-            <span style={{ fontSize: "0.7rem", opacity: 0.6 }}>{TRANSLATE_SHORTCUT}</span>
-            <span>Translate</span>
-          </button>
-        )}
-      </div>
-
       <footer className="status-bar">
-        <span>{status}</span>
-        <span>{footerDetails}</span>
+        <span className={`status-${status.tone}`}>{status.text}</span>
+        <span className="status-right">
+          {problems.map((problem) => <span key={problem} className="status-error">{problem}</span>)}
+          <span>{config.model}</span>
+        </span>
       </footer>
 
       {showSettings && (
-        <div className="overlay-mask" onClick={() => setShowSettings(false)} style={isSizingFont ? { backdropFilter: "none", WebkitBackdropFilter: "none" } : undefined}>
-          <div className="settings-card" onClick={e => e.stopPropagation()} style={isSizingFont ? { opacity: 0.25, transition: "opacity 0.1s" } : undefined}>
-            <div className="settings-header">
-              <h2 className="settings-title">{t("settings")}</h2>
-              <button className="icon-btn" onClick={() => setShowSettings(false)}><IconX /></button>
-            </div>
-            
-            <div className="settings-body">
-              <div className="settings-section">
-                <div className="section-label">{t("engine")}</div>
-                <div className="settings-list">
-                  <div className="settings-row">
-                    <div className="settings-info"><div className="settings-name">{t("inference")}</div></div>
-                    <div className="segmented-control">
-                      <button className={`segment-btn ${config.mode === "local" ? "active" : ""}`} onClick={() => updateConfig({ mode: "local" })}>{t("internal")}</button>
-                      <button className={`segment-btn ${config.mode === "http" ? "active" : ""}`} onClick={() => updateConfig({ mode: "http" })}>{t("external")}</button>
-                    </div>
-                  </div>
-                  <div className="settings-row">
-                    <div className="settings-info"><div className="settings-name">{t("model")}</div><div className="settings-desc">{t("model_desc")}</div></div>
-                    <div className="settings-input-wrapper"><input className="settings-input" value={config.model} onChange={e => updateConfig({ model: e.target.value })} /></div>
-                  </div>
-                  {config.mode === "http" && (
-                    <div className="settings-row">
-                      <div className="settings-info"><div className="settings-name">{t("host")}</div><div className="settings-desc">{t("host_desc")}</div></div>
-                      <div className="settings-input-wrapper"><input className="settings-input" value={config.host} onChange={e => updateConfig({ host: e.target.value })} /></div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="settings-section">
-                <div className="section-label">{t("style")}</div>
-                <div className="settings-list">
-                  <div className="settings-row">
-                    <div className="settings-info"><div className="settings-name">{t("appearance")}</div></div>
-                    <div className="segmented-control">
-                      <button className={`segment-btn ${config.theme === "light" ? "active" : ""}`} onClick={() => updateConfig({ theme: "light" })}>{t("light")}</button>
-                      <button className={`segment-btn ${config.theme === "dark" ? "active" : ""}`} onClick={() => updateConfig({ theme: "dark" })}>{t("dark")}</button>
-                      <button className={`segment-btn ${config.theme === "system" ? "active" : ""}`} onClick={() => updateConfig({ theme: "system" })}>{t("system")}</button>
-                    </div>
-                  </div>
-                  <div className="settings-row">
-                    <div className="settings-info"><div className="settings-name">{t("ui_lang")}</div></div>
-                    <div className="segmented-control">
-                      <button className={`segment-btn ${config.ui_lang === "en" ? "active" : ""}`} onClick={() => updateConfig({ ui_lang: "en" })}>English</button>
-                      <button className={`segment-btn ${config.ui_lang === "zh" ? "active" : ""}`} onClick={() => updateConfig({ ui_lang: "zh" })}>简体中文</button>
-                    </div>
-                  </div>
-                  <div className="settings-row">
-                    <div className="settings-info"><div className="settings-name">{t("font_size")}</div></div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                      <input type="range" min="12" max="26" value={config.font_size} onChange={e => updateConfig({ font_size: parseInt(e.target.value) })} onPointerDown={() => setIsSizingFont(true)} onPointerUp={() => setIsSizingFont(false)} style={{ width: 100, accentColor: "var(--bg-accent)" }} />
-                      <span style={{ fontSize: "0.85rem", fontWeight: 800 }}>{config.font_size}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="settings-section">
-                <div className="section-label">{t("features")}</div>
-                <div className="settings-list">
-                  <div className="settings-row">
-                    <div className="settings-info">
-                      <div className="settings-name">{t("hotkey")}</div>
-                      <div className="settings-desc">{hotkeyDescription}</div>
-                    </div>
-                    <Toggle checked={config.hotkey_enabled} onChange={v => updateConfig({ hotkey_enabled: v })} />
-                  </div>
-                  {IS_MAC_BUILD && (
-                    <>
-                      <div className="settings-row">
-                        <div className="settings-info">
-                          <div className="settings-name">{t("accessibility")}</div>
-                          <div className="settings-desc">{t("accessibility_desc")}</div>
-                        </div>
-                        {accessibilityGranted
-                          ? <span style={{ fontSize: "0.8rem", color: "var(--fg-muted)", fontWeight: 600 }}>{t("accessibility_granted")} ✓</span>
-                          : <div style={{ display: "flex", gap: 6 }}>
-                              <button className="secondary-btn-sm" onClick={() => openPrivacySettings("accessibility")}>{t("grant_accessibility")}</button>
-                              <button className="secondary-btn-sm" onClick={async () => { await syncHotkeyListener(); setAccessibilityGranted(await checkAccessibility()); }}>{config.ui_lang === "zh" ? "重试" : "Retry"}</button>
-                            </div>
-                        }
-                      </div>
-                      <div className="settings-row">
-                        <div className="settings-info">
-                          <div className="settings-name">{t("input_monitoring")}</div>
-                          <div className="settings-desc">{t("input_monitoring_desc")}</div>
-                        </div>
-                        {inputMonitoringGranted
-                          ? <span style={{ fontSize: "0.8rem", color: "var(--fg-muted)", fontWeight: 600 }}>{t("accessibility_granted")} ✓</span>
-                          : <div style={{ display: "flex", gap: 6 }}>
-                              <button className="secondary-btn-sm" onClick={() => openPrivacySettings("input_monitoring")}>{t("grant_accessibility")}</button>
-                              <button className="secondary-btn-sm" onClick={async () => { await syncHotkeyListener(); setInputMonitoringGranted(await checkInputMonitoring()); }}>{config.ui_lang === "zh" ? "重试" : "Retry"}</button>
-                            </div>
-                        }
-                      </div>
-                    </>
-                  )}
-                  <div className="settings-row">
-                    <div className="settings-info"><div className="settings-name">{t("bilingual")}</div><div className="settings-desc">{t("bilingual_desc")}</div></div>
-                    <Toggle checked={config.output_mode === "interleaved"} onChange={v => updateConfig({ output_mode: v ? "interleaved" : "translations_only" })} />
-                  </div>
-                  <div className="settings-row">
-                    <div className="settings-info"><div className="settings-name">{t("context")}</div><div className="settings-desc">{t("context_desc")}</div></div>
-                    <Toggle checked={config.use_context} onChange={v => updateConfig({ use_context: v })} />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="settings-footer">
-              <button className="primary-btn" style={{ width: "100%" }} onClick={() => setShowSettings(false)}>{t("done")}</button>
-            </div>
-          </div>
-        </div>
+        <SettingsSheet
+          t={t}
+          config={config}
+          update={updateConfig}
+          models={models}
+          refreshModels={() => void refreshModels()}
+          isMac={IS_MAC_BUILD}
+          doubleCopyShortcut={DOUBLE_COPY_SHORTCUT}
+          permissions={permissions}
+          openPrivacySettings={(page) => void openPrivacySettings(page)}
+          recheckPermissions={() => void recheckPermissions()}
+          onClose={() => setShowSettings(false)}
+        />
       )}
 
-      {/* --- HISTORY --- */}
       {showHistory && (
-        <div className="overlay-mask" onClick={closeHistory} style={{ justifyContent: "flex-end" }}>
-          <div className="drawer-card" onClick={e => e.stopPropagation()}>
-            <div className="drawer-header">
-              <div className="drawer-top-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <h2 className="settings-title" style={{ margin: 0 }}>{t("history")}</h2>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                   {confirmClear ? (
-                     <>
-                       <button className="secondary-btn-sm danger-btn" onClick={() => { setHistory([]); setConfirmClear(false); }}>{t("confirm_clear")}</button>
-                       <button className="secondary-btn-sm" onClick={() => setConfirmClear(false)}>{t("cancel")}</button>
-                     </>
-                   ) : (
-                     <button className="secondary-btn-sm" onClick={() => setConfirmClear(true)}>
-                       <IconTrash /> {t("clear")}
-                     </button>
-                   )}
-                   <button className="icon-btn" onClick={closeHistory}><IconX /></button>
-                </div>
-              </div>
-              <div className="history-search-container">
-                <span className="search-icon"><IconSearch /></span>
-                <input className="history-search-input" placeholder={t("search")} value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
-              </div>
-            </div>
-            <div className="history-list" ref={historyListRef}>
-              {filteredHistory.length === 0 ? (
-                <div style={{ color: "var(--fg-subtle)", textAlign: "center", marginTop: 40, fontSize: "0.875rem" }}>{searchTerm ? "No matches." : t("empty_history")}</div>
-              ) : (
-                filteredHistory.map(item => (
-                  <div key={item.id} className="history-item" onClick={() => { setInput(item.source); setOutput(item.target); closeHistory(); }}>
-                    <div className="history-content">
-                      <div className="history-source">{cleanText(item.source)}</div>
-                      <div className="history-target">{cleanText(item.target)}</div>
-                    </div>
-                    <div className="history-actions">
-                      <button className="history-delete-btn" onClick={(e) => { e.stopPropagation(); setHistory(h => h.filter(i => i.id !== item.id)); }}><IconTrash /></button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
+        <HistoryDrawer
+          t={t}
+          history={history}
+          onOpen={openHistoryItem}
+          onDelete={(id) => setHistory((prev) => prev.filter((item) => item.id !== id))}
+          onClear={() => setHistory([])}
+          onClose={() => setShowHistory(false)}
+        />
       )}
     </div>
   );

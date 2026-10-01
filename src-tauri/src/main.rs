@@ -198,7 +198,6 @@ fn default_config() -> Value {
     json!({
         "source_lang": "auto",
         "target_lang": "zh",
-        "use_context": false,
         "collapse_newlines": false,
         "output_mode": "translations_only",
         "translation_mode": "normal",
@@ -230,14 +229,32 @@ fn merge_object_config(base: &mut Value, patch: Value) {
 fn load_config_value() -> Value {
     let mut config = default_config();
     let path = config_path();
-    let Ok(raw) = fs::read_to_string(path) else {
+    let Ok(raw) = fs::read_to_string(&path) else {
         return config;
     };
-    let Ok(saved) = serde_json::from_str::<Value>(&raw) else {
-        return config;
-    };
-    merge_object_config(&mut config, saved);
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(saved) if saved.is_object() => merge_object_config(&mut config, saved),
+        _ => back_up_corrupt_config(&path, &raw),
+    }
     config
+}
+
+// Move an unreadable config aside (never overwriting an earlier backup) so the
+// next save starts from defaults instead of silently replacing the user's file.
+fn back_up_corrupt_config(path: &PathBuf, raw: &str) {
+    let mut backup = path.with_extension("json.corrupt");
+    let mut index = 1;
+    while backup.exists() {
+        backup = path.with_extension(format!("json.corrupt.{index}"));
+        index += 1;
+    }
+    match fs::write(&backup, raw) {
+        Ok(()) => {
+            let _ = fs::remove_file(path);
+            eprintln!("main: config unreadable, moved to {}", backup.display());
+        }
+        Err(error) => eprintln!("main: config unreadable and backup failed: {error}"),
+    }
 }
 
 fn save_config_value(patch: &str) -> Result<String, String> {
@@ -941,6 +958,7 @@ fn spawn_translation_stream(
     let app_handle = app.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
+        let mut finished = false;
         for line in reader.lines() {
             let Ok(line) = line else {
                 enqueue_translation_event(
@@ -969,6 +987,12 @@ fn spawn_translation_stream(
                             }
                         }
                         object.insert("job_id".into(), Value::from(job_id));
+                        if matches!(
+                            object.get("event").and_then(Value::as_str),
+                            Some("completed" | "error")
+                        ) {
+                            finished = true;
+                        }
                     }
                     enqueue_translation_event(&app_handle.state::<AppState>(), job_id, payload);
                 }
@@ -998,7 +1022,7 @@ fn spawn_translation_stream(
             }
         }
 
-        let _ = child.lock().unwrap().wait();
+        let exit_status = child.lock().unwrap().wait();
 
         if canceled_job_id == job_id {
             enqueue_translation_event(
@@ -1007,6 +1031,22 @@ fn spawn_translation_stream(
                 json!({
                     "job_id": job_id,
                     "event": "canceled",
+                }),
+            );
+        } else if !finished {
+            // The bridge crashed or was killed without reporting; without this
+            // event the UI would keep waiting forever.
+            let status = exit_status
+                .map(|status| status.to_string())
+                .unwrap_or_else(|error| error.to_string());
+            enqueue_translation_event(
+                &app_handle.state::<AppState>(),
+                job_id,
+                json!({
+                    "job_id": job_id,
+                    "event": "error",
+                    "code": "bridge_exited",
+                    "message": format!("Translation process stopped unexpectedly ({status})."),
                 }),
             );
         }
@@ -1052,6 +1092,13 @@ fn get_config() -> Result<String, String> {
 #[tauri::command]
 fn save_config(app: AppHandle, payload: String, state: State<AppState>) -> Result<String, String> {
     let result = save_config_value(&payload)?;
+    // Theme, font size and other UI settings must not restart the hotkey listener.
+    let touches_hotkey = serde_json::from_str::<Value>(&payload)
+        .map(|patch| patch.get("hotkey_enabled").is_some())
+        .unwrap_or(false);
+    if !touches_hotkey {
+        return Ok(result);
+    }
     #[cfg(target_os = "windows")]
     {
         if state.frontend_ready.load(Ordering::Acquire) {
@@ -1088,6 +1135,11 @@ fn hotkey_status(state: State<AppState>) -> HotkeyStatus {
 #[tauri::command]
 fn translate(app: AppHandle, payload: String) -> Result<String, String> {
     run_bridge(&app, "translate", Some(&payload))
+}
+
+#[tauri::command]
+fn list_models(app: AppHandle, payload: String) -> Result<String, String> {
+    run_bridge(&app, "list-models", Some(&payload))
 }
 
 #[tauri::command]
@@ -1334,6 +1386,7 @@ fn main() {
             show_main_window_command,
             write_clipboard_text,
             read_clipboard,
+            list_models,
             check_accessibility,
             request_accessibility,
             check_input_monitoring,

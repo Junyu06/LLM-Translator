@@ -1,9 +1,16 @@
-export type HistoryItem = { id: string; source: string; target: string; timestamp: number };
+export type TranslationSegment = { source: string; target: string; done: boolean };
+
+export type HistoryItem = {
+  id: string;
+  source: string;
+  target: string;
+  timestamp: number;
+  segments?: TranslationSegment[];
+};
 
 export type AppConfig = {
   source_lang: string;
   target_lang: string;
-  use_context: boolean;
   collapse_newlines: boolean;
   output_mode: "translations_only" | "interleaved";
   translation_mode: "normal" | "markdown";
@@ -22,7 +29,6 @@ export type TranslationRequest = {
   text: string;
   source_lang: string;
   target_lang: string;
-  use_context: boolean;
   collapse_newlines: boolean;
   output_mode: "translations_only" | "interleaved";
   translation_mode: "normal" | "markdown";
@@ -35,4 +41,16 @@ export type TranslationResponse = {
   output_text: string;
   detected_source_lang: string | null;
   segments: Array<{ source: string; target: string }>;
+};
+
+// One line of the bridge's translate-stream output, plus events added by the Rust shell.
+export type TranslationEvent = {
+  event: "started" | "update" | "completed" | "error" | "canceled";
+  output_text?: string;
+  segments?: TranslationSegment[];
+  completed_segments?: number;
+  total_segments?: number;
+  detected_source_lang?: string | null;
+  code?: string;
+  message?: string;
 };

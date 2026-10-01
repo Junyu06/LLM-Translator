@@ -114,6 +114,17 @@ export async function translate(payload: TranslationRequest): Promise<Translatio
   });
 }
 
+export async function listModels(config: Pick<AppConfig, "mode" | "host">): Promise<string[]> {
+  if (isTauriRuntime()) {
+    const result = await invokeJson<{ models: string[] }>("list_models", { mode: config.mode, host: config.host });
+    return result.models;
+  }
+  const host = config.mode === "http" && config.host.trim() ? config.host.trim().replace(/\/+$/, "") : "http://127.0.0.1:11434";
+  const response = await fetch(`${host}/api/tags`);
+  const body = (await response.json()) as { models?: Array<{ name: string }> };
+  return (body.models ?? []).map((model) => model.name).sort();
+}
+
 export async function startTranslationStream(payload: TranslationRequest): Promise<number> {
   if (!isTauriRuntime()) {
     throw new Error("Streaming translation is only available in the Tauri runtime.");
@@ -201,13 +212,6 @@ export async function onHotkeyError(callback: (message: string) => void): Promis
   });
 }
 
-export async function showMainWindow(): Promise<void> {
-  if (!isTauriRuntime()) {
-    return;
-  }
-  await invokeVoid("show_main_window_command");
-}
-
 export async function syncHotkeyListener(): Promise<void> {
   if (!isTauriRuntime()) {
     return;
@@ -275,39 +279,9 @@ export async function requestInputMonitoring(): Promise<boolean> {
   return invoke<boolean>("request_input_monitoring");
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
 export async function notifyFrontendReady(): Promise<void> {
   if (!isTauriRuntime()) return;
   await invokeVoid("frontend_ready");
-}
-
-export async function waitForBackend(timeoutMs = 12000) {
-  const deadline = Date.now() + timeoutMs;
-  let lastError = "Backend did not become ready in time.";
-
-  while (Date.now() < deadline) {
-    try {
-      const [health, config] = await Promise.all([getHealth(), getConfig()]);
-      if (health.status === "ok") {
-        return {
-          config,
-          desktopStatus: await getDesktopBackendStatus()
-        };
-      }
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : "Load failed";
-    }
-    await sleep(350);
-  }
-
-  const desktopStatus = await getDesktopBackendStatus();
-  if (desktopStatus?.error) {
-    throw new Error(desktopStatus.error);
-  }
-  throw new Error(lastError);
 }
 
 export async function loadInitialConfig(): Promise<{
