@@ -124,6 +124,41 @@ class TranslationServiceTests(unittest.TestCase):
             TranslationService().translate(TranslationRequest(text="hello", model="m"))
         self.assertEqual(ctx.exception.code, "ollama_unavailable")
 
+    @patch("python_backend.services.translation_service.OllamaBackend")
+    def test_glossary_and_picked_prompt_reach_the_request(self, backend_cls):
+        _, calls = self.run_service(
+            backend_cls,
+            TranslationRequest(text="The medium setting.", target_lang="zh", model="someone/quant:q4",
+                               prompt_style="index", glossary="medium setting = 思考档位"),
+            "思考档位。",
+        )
+        self.assertIn("术语使用固定译法（medium setting 固定译为“思考档位”）", calls[0][-1]["content"])
+
+    @patch("python_backend.services.translation_service.OllamaBackend")
+    def test_custom_prompt_is_used(self, backend_cls):
+        _, calls = self.run_service(
+            backend_cls,
+            TranslationRequest(text="Hello.", model="m", prompt_style="custom", custom_prompt="To {target_lang}: {text}"),
+            "你好。",
+        )
+        self.assertEqual(calls[0][-1]["content"], "To Chinese: Hello.")
+
+    def test_custom_style_needs_a_template(self):
+        with self.assertRaisesRegex(ValueError, "custom prompt is empty"):
+            TranslationRequest(text="Hello.", prompt_style="custom", custom_prompt="  ")
+
+    @patch("python_backend.services.translation_service.OllamaBackend")
+    def test_retranslate_sends_context_and_temperature(self, backend_cls):
+        _, calls = self.run_service(
+            backend_cls,
+            TranslationRequest(text="Second.", model="m", temperature=0.3,
+                               context=[{"source": "First.", "target": "第一。"}, {"source": "", "target": ""}]),
+            "第二。",
+        )
+        self.assertEqual([m["role"] for m in calls[0]], ["user", "assistant", "user"])
+        self.assertEqual(calls[0][1]["content"], "第一。")
+        self.assertEqual(backend_cls.call_args[0][0].options, {"temperature": 0.3})
+
     def test_rejects_empty_input(self):
         with self.assertRaises(ValueError):
             list(TranslationService().stream_translate(TranslationRequest(text="   ")))

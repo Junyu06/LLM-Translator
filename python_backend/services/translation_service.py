@@ -8,12 +8,14 @@ from core import (
     OutputMode,
     PipelineOptions,
     Segment,
+    build_custom_prompt,
     build_prompt,
-    detect_family,
     estimate_tokens,
     iter_translation,
     pairs_from,
+    parse_glossary,
     render_output,
+    resolve_family,
     split_long_segments,
     split_markdown_blocks,
     split_paragraphs,
@@ -65,9 +67,18 @@ class TranslationService:
         self._validate_request_budget(request, text, segments)
 
         detected = self._detect_source_lang(text) if request.source_lang == "auto" else request.source_lang
-        family = detect_family(request.model)
+        family = resolve_family(request.model, request.prompt_style)
+        glossary = parse_glossary(request.glossary)
 
         def prompt_for(source: str) -> str:
+            if request.prompt_style == "custom":
+                return build_custom_prompt(
+                    request.custom_prompt,
+                    source,
+                    target_lang=request.target_lang,
+                    source_lang=request.source_lang,
+                    glossary=glossary,
+                )
             return build_prompt(
                 source,
                 family=family,
@@ -75,12 +86,15 @@ class TranslationService:
                 source_lang=request.source_lang,
                 detected_lang=detected or "auto",
                 markdown=markdown,
+                glossary=glossary,
             )
 
         backend = OllamaBackend(OllamaBackendOptions(
             model=request.model.strip(),
             host=request.host.strip() if request.mode == "http" else LOCAL_HOST,
+            options={"temperature": float(request.temperature)},
         ))
+        history = self._context_turn(request.context, prompt_for)
         output_mode = OutputMode(request.output_mode)
         join_with = "\n\n" if markdown else "\n"
 
@@ -105,7 +119,7 @@ class TranslationService:
         yield event("started", targets, done, completed, total)
 
         try:
-            for progress in iter_translation(segments, backend.stream_chat, prompt_for, PipelineOptions(markdown=markdown)):
+            for progress in iter_translation(segments, backend.stream_chat, prompt_for, PipelineOptions(markdown=markdown, history=history)):
                 targets, done, completed = progress.targets, progress.done, progress.completed
                 if not progress.finished:
                     yield event("update", targets, done, completed, total)
@@ -123,6 +137,26 @@ class TranslationService:
             detected_source_lang=detected,
         ).to_dict()
         yield finished
+
+    @staticmethod
+    def _context_turn(context: List[dict], prompt_for) -> List[dict]:
+        """The paragraphs before a re-translated one, as an earlier chat turn (about 250 tokens at most)."""
+        kept: List[dict] = []
+        tokens = 0
+        for pair in reversed(context):
+            cost = estimate_tokens(pair["source"])
+            if not pair["source"].strip() or not pair["target"].strip():
+                continue
+            if tokens + cost > 250:
+                break
+            kept.insert(0, pair)
+            tokens += cost
+        if not kept:
+            return []
+        return [
+            {"role": "user", "content": prompt_for("\n\n".join(pair["source"] for pair in kept))},
+            {"role": "assistant", "content": "\n\n".join(pair["target"] for pair in kept)},
+        ]
 
     def _render_output(self, pairs, mode: OutputMode, collapse_newlines: bool, join_with: str) -> str:
         output_text = render_output(pairs, mode=mode, join_with=join_with)

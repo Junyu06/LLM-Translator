@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Iterator, List
 
@@ -41,6 +41,8 @@ class PipelineOptions:
     max_chunk_segments: int = 40
     history_tokens: int = 250
     markdown: bool = False
+    # Earlier chat turns to send before the first chunk (re-translating one paragraph).
+    history: List[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -212,7 +214,7 @@ def iter_translation(
     done = [not segment.translatable for segment in segments]
     total = sum(1 for segment in segments if segment.translatable)
     completed = 0
-    history: List[dict] = []
+    history: List[dict] = list(opt.history)
 
     def snapshot(finished: bool = False) -> Progress:
         return Progress(list(targets), list(done), completed, total, finished)

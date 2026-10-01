@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from core.prompt import PROMPT_STYLES
+
 
 LANGUAGES = {"auto", "zh", "en", "ja", "ko", "fr", "de", "es", "ru"}
 TARGET_LANGUAGES = LANGUAGES - {"auto"}
@@ -23,6 +25,11 @@ def _require_string_choice(field: str, value: Any, choices: set[str]) -> None:
 def _require_bool(field: str, value: Any) -> None:
     if not isinstance(value, bool):
         raise ValueError(f"Invalid {field}: expected boolean.")
+
+
+def _require_str(field: str, value: Any) -> None:
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid {field}: expected string.")
 
 
 def _require_int(field: str, value: Any, *, minimum: int | None = None) -> None:
@@ -48,6 +55,9 @@ class AppConfig:
     minimize_to_tray: bool = True
     theme: str = "system"
     ui_lang: str = "en"
+    glossary: str = ""
+    prompt_style: str = "auto"
+    custom_prompt: str = ""
 
     def __post_init__(self) -> None:
         _require_string_choice("source_lang", self.source_lang, LANGUAGES)
@@ -66,6 +76,9 @@ class AppConfig:
         _require_bool("minimize_to_tray", self.minimize_to_tray)
         _require_string_choice("theme", self.theme, THEMES)
         _require_string_choice("ui_lang", self.ui_lang, UI_LANGUAGES)
+        _require_str("glossary", self.glossary)
+        _require_string_choice("prompt_style", self.prompt_style, PROMPT_STYLES)
+        _require_str("custom_prompt", self.custom_prompt)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -85,6 +98,13 @@ class TranslationRequest:
     max_chars: int = 50000
     max_segments: int = 200
     max_segment_chars: int = 8000
+    glossary: str = ""
+    prompt_style: str = "auto"
+    custom_prompt: str = ""
+    # Re-translating one paragraph: a little randomness so the retry can differ,
+    # and the paragraphs before it (source and translation) as context.
+    temperature: float = 0.0
+    context: list[dict[str, str]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not isinstance(self.text, str):
@@ -102,6 +122,18 @@ class TranslationRequest:
         _require_int("max_chars", self.max_chars, minimum=0)
         _require_int("max_segments", self.max_segments, minimum=0)
         _require_int("max_segment_chars", self.max_segment_chars, minimum=0)
+        _require_str("glossary", self.glossary)
+        _require_string_choice("prompt_style", self.prompt_style, PROMPT_STYLES)
+        _require_str("custom_prompt", self.custom_prompt)
+        if self.prompt_style == "custom" and not self.custom_prompt.strip():
+            raise ValueError("The custom prompt is empty. Write one in Settings or pick another prompt.")
+        if isinstance(self.temperature, bool) or not isinstance(self.temperature, (int, float)) or not 0 <= self.temperature <= 2:
+            raise ValueError("Invalid temperature: expected a number from 0 to 2.")
+        if not isinstance(self.context, list) or not all(
+            isinstance(pair, dict) and isinstance(pair.get("source"), str) and isinstance(pair.get("target"), str)
+            for pair in self.context
+        ):
+            raise ValueError("Invalid context: expected a list of {source, target} pairs.")
 
 
 @dataclass
