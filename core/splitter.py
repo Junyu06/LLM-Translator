@@ -249,7 +249,11 @@ def list_items(text: str) -> List[str]:
 # which never crosses a line or touches container markers.
 
 _recorder = threading.local()
-_BARE_URL_RE = re.compile(r"(?:https?://|www\.)", re.IGNORECASE)
+# A bare URL running right up to a link: starts after a space, a line start or
+# "(", and holds no brackets, backticks or unbalanced parentheses.
+_URL_BEFORE_RE = re.compile(
+    r"(?:^|[\s(])(?:https?://|www\.)[^\s()<>\[\]`]*(?:\([^\s()<>`]*\)[^\s()<>\[\]`]*)*$", re.IGNORECASE
+)
 
 
 def _recording(rule, label_offset: int, disable_nested: bool, url_attr: str):
@@ -332,9 +336,10 @@ def inline_reference_links(text: str) -> str:
             spans = _recorder.spans
         finally:
             _recorder.spans = None
+        # Placed even without links, so the next cell on the line is looked for after this one.
+        line_starts = _content_line_starts(lines, token.map[0], token.content, cursors)
         if not spans:
             continue
-        line_starts = _content_line_starts(lines, token.map[0], token.content, cursors)
         content_offsets = []
         offset = 0
         for content_line in token.content.split("\n"):
@@ -345,8 +350,7 @@ def inline_reference_links(text: str) -> str:
             if source is not token.content:
                 continue
             # Inside a bare URL the display (GFM autolinks) shows one link; leave it.
-            word = re.split(r"\s", token.content[:link_start])[-1]
-            if _BARE_URL_RE.search(word):
+            if _URL_BEFORE_RE.search(token.content[:link_start]):
                 continue
             index = max(i for i, value in enumerate(content_offsets) if value <= start)
             if line_starts[index] is None or "\n" in token.content[start:end]:

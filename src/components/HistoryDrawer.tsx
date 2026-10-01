@@ -28,7 +28,12 @@ export default function HistoryDrawer({ t, top, history, onOpen, onDelete, onCle
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (listRef.current) listRef.current.scrollTop = savedScrollTop;
+    const list = listRef.current;
+    if (list) list.scrollTop = savedScrollTop;
+    // However the drawer closes (its button, the mask, the toolbar), keep the position.
+    return () => {
+      if (list) savedScrollTop = list.scrollTop;
+    };
   }, []);
 
   const close = () => {
