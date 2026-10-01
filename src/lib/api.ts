@@ -13,7 +13,8 @@ export type HotkeyStatus = {
   error: string | null;
 };
 
-type OcrResponse = {
+export type ClipboardCapture = {
+  source: "text" | "image" | "empty";
   text: string;
 };
 
@@ -214,13 +215,15 @@ export async function syncHotkeyListener(): Promise<void> {
   await invokeVoid("sync_hotkey_listener");
 }
 
-export async function readClipboardText(): Promise<string> {
+// Text comes back as-is; an image comes back as OCR text with source "image".
+export async function readClipboard(): Promise<ClipboardCapture> {
   if (isTauriRuntime()) {
-    return invokeRaw<string>("read_clipboard_text");
+    return invokeJson<ClipboardCapture>("read_clipboard");
   }
 
   if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
-    return navigator.clipboard.readText();
+    const text = await navigator.clipboard.readText();
+    return { source: text.trim() ? "text" : "empty", text };
   }
 
   throw new Error("Clipboard read is not available in this runtime.");
@@ -270,14 +273,6 @@ export async function requestInputMonitoring(): Promise<boolean> {
   if (!isTauriRuntime()) return true;
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<boolean>("request_input_monitoring");
-}
-
-export async function runClipboardOcr(): Promise<string> {
-  if (!isTauriRuntime()) {
-    throw new Error("Clipboard OCR is only available in the Tauri runtime.");
-  }
-  const result = await invokeJson<OcrResponse>("run_clipboard_ocr");
-  return result.text;
 }
 
 function sleep(ms: number) {

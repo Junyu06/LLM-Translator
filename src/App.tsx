@@ -8,11 +8,10 @@ import {
   loadInitialConfig,
   notifyFrontendReady,
   onHotkeyError,
-  readClipboardText,
+  readClipboard,
   refreshBackendStatus,
   requestAccessibility,
   requestInputMonitoring,
-  runClipboardOcr,
   saveConfig,
   startTranslationStream,
   syncHotkeyListener,
@@ -87,7 +86,11 @@ const I18N = {
     system: "System",
     mode_normal: "Normal",
     mode_markdown: "Markdown",
-    mode_markdown_desc: "Preserve Markdown structure during translation."
+    mode_markdown_desc: "Preserve Markdown structure during translation.",
+    reading_clipboard: "Reading clipboard…",
+    clipboard_empty: "Clipboard has no text or image",
+    clipboard_error: "Clipboard error",
+    ocr_no_text: "No text found in the image"
   },
   zh: {
     title: "翻译器",
@@ -134,7 +137,11 @@ const I18N = {
     system: "跟随系统",
     mode_normal: "常规",
     mode_markdown: "Markdown",
-    mode_markdown_desc: "翻译时保留 Markdown 结构并渲染。"
+    mode_markdown_desc: "翻译时保留 Markdown 结构并渲染。",
+    reading_clipboard: "正在读取剪贴板…",
+    clipboard_empty: "剪贴板里没有文字或图片",
+    clipboard_error: "读取剪贴板出错",
+    ocr_no_text: "图片里没有识别到文字"
   }
 };
 
@@ -579,21 +586,34 @@ export default function App() {
 
   runTranslationRef.current = runTranslation;
   captureClipboardIntoInputRef.current = async (prefilledText?: string, autoTranslate = false) => {
-    let clipboardText = prefilledText ?? "";
-    if (!clipboardText) {
-      for (let attempt = 0; attempt < 6; attempt += 1) {
-        clipboardText = await readClipboardText().catch(() => "");
-        if (clipboardText) break;
-        await new Promise((resolve) => window.setTimeout(resolve, 50));
+    let text = prefilledText?.trim() ? prefilledText : "";
+    let source: "text" | "image" | "empty" = text ? "text" : "empty";
+    if (!text) {
+      setStatus(t("reading_clipboard"));
+      // Right after a double copy the source app may still be writing the clipboard.
+      for (let attempt = 0; attempt < 3 && source === "empty"; attempt += 1) {
+        if (attempt > 0) await new Promise((resolve) => window.setTimeout(resolve, 80));
+        try {
+          const capture = await readClipboard();
+          source = capture.source;
+          text = capture.text;
+        } catch (err: any) {
+          setStatus(`${t("clipboard_error")}: ${err?.message || err}`);
+          return;
+        }
       }
     }
-    setInput(clipboardText);
+    if (!text.trim()) {
+      setStatus(source === "image" ? t("ocr_no_text") : t("clipboard_empty"));
+      return;
+    }
+    setInput(text);
     setOutput("");
     setSegments([]);
     setStatus(t("ready"));
 
-    if (autoTranslate && clipboardText) {
-      await runTranslationRef.current(clipboardText);
+    if (autoTranslate) {
+      await runTranslationRef.current(text);
     }
   };
   const pollProgress = async (jobId: number, sourceText: string, runId: number) => {
@@ -661,26 +681,12 @@ export default function App() {
     return i.source.toLowerCase().includes(term) || i.target.toLowerCase().includes(term);
   });
 
-  const handlePaste = async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData.items;
-    let hasImage = false;
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].type.indexOf("image") !== -1) {
-        hasImage = true;
-        break;
-      }
-    }
-    if (hasImage) {
-      e.preventDefault();
-      setStatus("OCR...");
-      try {
-        const text = await runClipboardOcr();
-        if (text) runTranslation(text);
-        else setStatus("No text found in image");
-      } catch (err: any) {
-        setStatus(`OCR Error: ${err.message}`);
-      }
-    }
+  // Pasting an image runs the same capture as the clipboard button: OCR, then translate.
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData?.items ?? []);
+    if (!items.some((item) => item.type.startsWith("image/"))) return;
+    e.preventDefault();
+    void captureClipboardIntoInputRef.current(undefined, true);
   };
 
   return (
@@ -718,7 +724,7 @@ export default function App() {
             </div>
           </div>
           <div className="editor-content">
-            <textarea ref={inputScrollRef} placeholder={t("placeholder")} value={input} onChange={e => setInput(e.target.value)} onScroll={e => { if (outputScrollRef.current) handleScrollSync(e.currentTarget, outputScrollRef.current); }} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runTranslation(input); }} onPaste={async (e) => { const items = e.clipboardData?.items; if (!items) return; for (let i = 0; i < items.length; i++) { if (items[i].type.startsWith("image/")) { e.preventDefault(); setStatus("OCR..."); try { const text = await runClipboardOcr(); if (text) runTranslation(text); else setStatus("No text"); } catch (err: any) { setStatus(`OCR Error: ${err.message}`); } return; } } }} />
+            <textarea ref={inputScrollRef} placeholder={t("placeholder")} value={input} onChange={e => setInput(e.target.value)} onScroll={e => { if (outputScrollRef.current) handleScrollSync(e.currentTarget, outputScrollRef.current); }} onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runTranslation(input); }} onPaste={handlePaste} />
           </div>
         </section>
         <section className={`editor-panel${fullscreenPanel === "input" ? " panel-hidden" : ""}`}>

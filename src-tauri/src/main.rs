@@ -1135,10 +1135,6 @@ fn show_main_window_command(app: AppHandle) -> Result<(), String> {
     show_main_window(&app)
 }
 
-#[tauri::command]
-fn read_clipboard_text() -> Result<String, String> {
-    read_clipboard_text_impl()
-}
 
 #[tauri::command]
 fn write_clipboard_text(payload: String) -> Result<(), String> {
@@ -1146,8 +1142,8 @@ fn write_clipboard_text(payload: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn run_clipboard_ocr(app: AppHandle) -> Result<String, String> {
-    run_bridge(&app, "ocr-clipboard", None)
+fn read_clipboard(app: AppHandle) -> Result<String, String> {
+    run_bridge(&app, "read-clipboard", None)
 }
 
 #[cfg(target_os = "macos")]
@@ -1336,9 +1332,8 @@ fn main() {
             take_translation_events,
             cancel_translation,
             show_main_window_command,
-            read_clipboard_text,
             write_clipboard_text,
-            run_clipboard_ocr,
+            read_clipboard,
             check_accessibility,
             request_accessibility,
             check_input_monitoring,
