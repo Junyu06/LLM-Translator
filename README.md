@@ -17,9 +17,11 @@ It only runs inference against models already available in Ollama.
 
 ## Features
 
-- Global hotkey: `Cmd+C Cmd+C` on macOS, `Ctrl+C Ctrl+C` on Windows
+- Global hotkey: `Cmd+C Cmd+C` on macOS, `Ctrl+C Ctrl+C` on Windows. The result opens in a small window next to the pointer (copy, open in the main window, `Esc` to go back), or in the main window if you turn that off
 - Translation only, or side by side with each source paragraph above its translation
-- Markdown mode keeps headings, lists, quotes and tables, and leaves code untouched
+- Per paragraph: show the original inline, copy it, or translate it again
+- Glossary: fixed translations for terms, sent to the model only when the term appears in the text
+- Markdown mode keeps headings, lists, quotes and tables (rendered GitHub-style), and leaves code untouched
 - Images on the clipboard go through system OCR from every entry point: the hotkey, the clipboard button, the tray menu, and pasting into the source box
 - Ollama on this machine or on another host
 
@@ -31,7 +33,7 @@ Small translation models keep names and terms consistent across a passage when t
 2. Groups consecutive paragraphs into chunks of about 700 tokens and sends each chunk in one request, paragraphs separated by blank lines. The last paragraphs of the previous chunk go along as an earlier chat turn.
 3. Splits the reply back into paragraphs and pairs each with its source. If the model merged or split paragraphs, that chunk is translated again one paragraph at a time, so pairs never drift.
 
-Prompts follow each model's card:
+Prompts follow each model's card. Settings can pick a family by hand (for a model whose name does not say what it is) or use a custom template with `{text}`, `{target_lang}`, `{target_lang_zh}` and `{glossary}`.
 
 | Model family | Detected from the model name | Prompt |
 |---|---|---|
@@ -39,11 +41,15 @@ Prompts follow each model's card:
 | Hy-MT / HY-MT / Hunyuan-MT (Tencent) | `hy-mt`, `hunyuan-mt` | `将以下文本翻译为{目标语言}，注意只需要输出翻译后的结果，不要额外解释：` |
 | Anything else | | A plain English instruction |
 
+Glossary terms use each family's documented terminology wording: Index-Translate's `要求：术语使用固定译法（…）` and Hy-MT's `参考下面的翻译：{原文} 翻译成 {译文}`.
+
+Markdown is split into blocks with markdown-it-py, the same CommonMark rules the display uses. Code, HTML blocks, thematic breaks and link definitions are not sent to the model; reference links are rewritten as inline links first.
+
 Requests send `think: false`. Ollama treats Index-Translate as a reasoning model, and without the flag the prompt it renders differs from the format the model was trained on.
 
 ## OCR
 
-- **macOS**: system Vision OCR
+- **macOS**: system Vision OCR with automatic language detection
 - **Windows**: WinRT OCR (requires the system OCR language packs)
 
 When the clipboard holds both text and a picture (Office does this), the text wins. A picture wins when the only text is its file name or URL.
@@ -64,7 +70,7 @@ If the config file is unreadable, Translator moves it aside with a no-clobber `.
 - `backend/`: Ollama HTTP client
 - `ui_mac/ocr.py`, `ui_windows/`: OCR and the Windows hotkey listener
 
-On macOS the app runs the bridge from a checkout of this repository with its `.venv`. By default that is the checkout the app was built from; set `TRANSLATOR_BACKEND_ROOT` at build time to point at another one. Windows builds bundle the bridge (see `AGENTS.md`).
+Release builds carry the bridge, built with PyInstaller, in the app's resources: `npm run build:macos` and `npm run build:windows` (see `AGENTS.md`). A macOS build without it (`npm run tauri:dev`, plain `tauri build`) runs the bridge from this checkout's `.venv`; set `TRANSLATOR_BACKEND_ROOT` at build time to point at another checkout.
 
 ## Development
 
@@ -83,10 +89,9 @@ Set `TRANSLATOR_STARTUP_LOG=1` and optionally `TRANSLATOR_STARTUP_LOG_FILE=<path
 
 - Translation quality depends on the model
 - OCR relies on system language packs
-- Markdown tables are translated but render as plain text
+- OCR returns lines in the order Vision gives them; multi-column screenshots can come out interleaved
 
 ## Roadmap
 
-- Glossary / terminology control
-- Re-translate or copy a single paragraph
-- A small quick-translate window for the hotkey
+- Translate text inside an image and draw the translation back onto it
+- OCR with document structure (paragraphs, columns) through Vision's `RecognizeDocumentsRequest`

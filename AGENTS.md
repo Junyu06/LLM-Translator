@@ -2,10 +2,11 @@
 
 ## Build And Packaging
 
-- Use `npm run build:windows` or `npm run tauri:build:windows` for Windows release packages.
-- Keep `npm run tauri:build` platform-neutral. Do not add Windows-only Python bridge resources to `src-tauri/tauri.conf.json`.
-- Windows packaging must use `src-tauri/tauri.windows-bridge.conf.json` to bundle `src-tauri/binaries/translator-bridge/` as `translator-bridge/`.
-- Build the Windows Python bridge through `scripts/build-python-bridge.mjs`; do not hand-copy bridge files into the bundle.
+- Use `npm run build:windows` or `npm run tauri:build:windows` for Windows release packages, and `npm run build:macos` for the macOS app.
+- Keep `npm run tauri:build` platform-neutral. Do not add Python bridge resources to `src-tauri/tauri.conf.json`.
+- Packaging must use `src-tauri/tauri.windows-bridge.conf.json` or `src-tauri/tauri.macos-bridge.conf.json` to bundle `src-tauri/binaries/translator-bridge/` as `translator-bridge/`.
+- Build the Python bridge through `scripts/build-python-bridge.mjs` (it picks `Translator_bridge_windows.spec` or `Translator_bridge_macos.spec`); do not hand-copy bridge files into the bundle.
+- The macOS bridge must be built on macOS with the project's virtualenv (it needs PyObjC). The app prefers the bundled bridge and falls back to the source checkout only when it is missing.
 - Do not switch the bridge back to PyInstaller one-file mode for normal release builds. One-file extraction adds user-visible startup latency when commands spawn the bridge repeatedly.
 
 ## Runtime Boundaries
@@ -28,7 +29,7 @@
 - Frontend validation: `/opt/homebrew/bin/npm run build:frontend` on the Mac mini, or `npm run build:frontend` when `npm` is on PATH.
 - Tauri validation: `~/.cargo/bin/cargo check --manifest-path src-tauri/Cargo.toml` on the Mac mini, or `cargo check --manifest-path src-tauri/Cargo.toml` when `cargo` is on PATH.
 - Before calling a Windows package ready, run `npm run tauri:build:windows`.
-- Verify the bridge executable responds to `src-tauri/binaries/translator-bridge/translator-bridge.exe health`.
+- Verify the bridge executable responds to `src-tauri/binaries/translator-bridge/translator-bridge.exe health` (macOS: `Translator.app/Contents/Resources/translator-bridge/translator-bridge health`).
 - Verify generated installer manifests include `translator-bridge` directory entries.
 - Run backend unit tests with `venv\Scripts\python.exe -m unittest discover -s tests -v`.
 
