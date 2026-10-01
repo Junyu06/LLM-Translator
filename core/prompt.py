@@ -1,120 +1,73 @@
-from dataclasses import dataclass
+"""Translation prompts, one template set per model family.
+
+Translation models follow the prompt they were trained with much better than
+a hand-written one, so each family uses its model card's wording:
+
+- Index-Translate (bilibili): "请将以下文本翻译为{目标语言}，直接输出翻译结果，不要进行任何解释。"
+- Hy-MT / HY-MT / Hunyuan-MT (Tencent): "将以下文本翻译为{目标语言}，注意只需要输出翻译后的结果，不要额外解释："
+- Any other model gets a plain English instruction.
+
+Context is not put in the prompt. The pipeline sends several paragraphs in one
+request instead, which both families handle as a normal translation input.
+"""
+
+from __future__ import annotations
+
 from enum import Enum
-from typing import Optional
 
-from .lang import normalize_lang, is_zh, display_lang
-
-
-class PromptPreset(str, Enum):
-    AUTO = "auto"
-    ZH_XX = "zh_xx"
-    XX_XX = "xx_xx"
-    TERMINOLOGY = "terminology"
-    CONTEXTUAL = "contextual"
-    FORMATTED_ZH = "formatted_zh"
-    MARKDOWN = "markdown"
+from .lang import en_name, is_zh, normalize_lang, zh_name
 
 
-@dataclass
-class TerminologyHint:
-    source_term: str
-    target_term: str
+class ModelFamily(str, Enum):
+    INDEX = "index"
+    HY = "hy"
+    GENERIC = "generic"
 
 
-@dataclass
-class PromptOptions:
-    source_lang: str = "auto"     # 'zh'/'en'/'ja'/'auto'
-    target_lang: str = "en"       # 'en'/'ja'/'zh'...
-    preset: PromptPreset = PromptPreset.AUTO
-
-    terminology: Optional[TerminologyHint] = None
-    context: str = ""
-    src_text_with_format: str = ""
+def detect_family(model: str) -> ModelFamily:
+    name = model.strip().lower().replace("_", "-")
+    if "index-translate" in name or "indexteam" in name:
+        return ModelFamily.INDEX
+    if "hy-mt" in name or "hymt" in name or "hunyuan-mt" in name:
+        return ModelFamily.HY
+    return ModelFamily.GENERIC
 
 
-def _auto_preset(opt: PromptOptions, source_text: str) -> PromptPreset:
-    if opt.src_text_with_format:
-        return PromptPreset.FORMATTED_ZH
-    if opt.context.strip():
-        return PromptPreset.CONTEXTUAL
-    if opt.terminology is not None:
-        return PromptPreset.TERMINOLOGY
+def build_prompt(
+    text: str,
+    *,
+    family: ModelFamily,
+    target_lang: str,
+    source_lang: str = "auto",
+    detected_lang: str = "auto",
+    markdown: bool = False,
+) -> str:
+    """`source_lang` is what the user picked; `detected_lang` only chooses the instruction language."""
+    src = normalize_lang(source_lang)
+    guessed = src if src != "auto" else normalize_lang(detected_lang)
 
-    src = normalize_lang(opt.source_lang)
-    tgt = normalize_lang(opt.target_lang)
+    if family == ModelFamily.INDEX:
+        source = "" if src == "auto" else zh_name(src)
+        kind = "Markdown 文本" if markdown else f"{source}文本"
+        keep = "保留 Markdown 格式，" if markdown else ""
+        return f"请将以下{kind}翻译为{zh_name(target_lang)}，{keep}直接输出翻译结果，不要进行任何解释。\n\n{text}"
 
-    if is_zh(src) or is_zh(tgt):
-        return PromptPreset.ZH_XX
-    return PromptPreset.XX_XX
+    if family == ModelFamily.HY and (is_zh(guessed) or is_zh(target_lang)):
+        kind = "Markdown 文本" if markdown else "文本"
+        keep = "保留 Markdown 格式，" if markdown else ""
+        return f"将以下{kind}翻译为{zh_name(target_lang)}，{keep}注意只需要输出翻译后的结果，不要额外解释：\n\n{text}"
 
-
-def build_prompt(source_text: str, opt: PromptOptions) -> str:
-    preset = opt.preset
-    if preset == PromptPreset.AUTO:
-        preset = _auto_preset(opt, source_text)
-
-    tgt_disp = display_lang(opt.target_lang)
-
-    # 官方模板：ZH<=>XX
-    if preset == PromptPreset.ZH_XX:
+    if family == ModelFamily.HY:
+        kind = "Markdown text" if markdown else "text"
+        keep = " Keep the Markdown formatting." if markdown else ""
         return (
-            f"将以下文本翻译为{tgt_disp}，注意只需要输出翻译后的结果，不要额外解释：\n\n"
-            f"{source_text}\n"
+            f"Translate the following {kind} into {en_name(target_lang)}.{keep} "
+            f"Note that you should only output the translated result without any additional explanation:\n\n{text}"
         )
 
-    # 官方模板：XX<=>XX（不含中文）
-    if preset == PromptPreset.XX_XX:
-        return (
-            f"Translate the following segment into {tgt_disp}, without additional explanation.\n\n"
-            f"{source_text}\n"
-        )
-
-    # 官方模板：术语干预
-    if preset == PromptPreset.TERMINOLOGY:
-        if opt.terminology is None:
-            # 兜底
-            return build_prompt(source_text, PromptOptions(
-                source_lang=opt.source_lang,
-                target_lang=opt.target_lang,
-                preset=PromptPreset.AUTO,
-            ))
-        return (
-            "参考下面的翻译：\n"
-            f"{opt.terminology.source_term} 翻译成 {opt.terminology.target_term}\n\n"
-            f"将以下文本翻译为{tgt_disp}，注意只需要输出翻译后的结果，不要额外解释：\n"
-            f"{source_text}\n"
-        )
-
-    # 官方模板：上下文翻译
-    if preset == PromptPreset.CONTEXTUAL:
-        ctx = opt.context.rstrip()
-        return (
-            "Use the content inside <context> only as reference. "
-            "Do not translate the content inside <context>; translate only the content inside <source>. "
-            f"Return only the translated result in {tgt_disp}, without additional explanation.\n\n"
-            f"<context>\n{ctx}\n</context>\n\n"
-            f"<source>\n{source_text}\n</source>\n"
-        )
-
-    # 官方模板：格式翻译（固定翻译为中文）
-    if preset == PromptPreset.FORMATTED_ZH:
-        src = opt.src_text_with_format if opt.src_text_with_format else source_text
-        return (
-            "将以下<source></source>之间的文本翻译为中文，注意只需要输出翻译后的结果，不要额外解释，"
-            "原文中的<sn></sn>标签表示标签内文本包含格式信息，需要在译文中相应的位置尽量保留该标签。输出格式为：<target>str</target>\n\n"
-            f"<source>{src}</source>\n"
-        )
-
-    if preset == PromptPreset.MARKDOWN:
-        return (
-            f"Translate the following Markdown content into {tgt_disp}. "
-            "Preserve the Markdown structure, headings, lists, tables, links, emphasis, and code fences. "
-            "Translate only human-readable prose, do not add explanations, and return Markdown only.\n\n"
-            f"{source_text}\n"
-        )
-
-    # fallback
+    kind = "Markdown text" if markdown else "text"
+    keep = "Keep the Markdown formatting. " if markdown else ""
     return (
-        f"Translate the following segment into {tgt_disp}, without additional explanation.\n\n"
-        f"{source_text}\n"
+        f"Translate the following {kind} into {en_name(target_lang)}. {keep}"
+        f"Keep the paragraph breaks. Output only the translation, without any explanation.\n\n{text}"
     )

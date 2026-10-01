@@ -36,7 +36,6 @@ def _require_int(field: str, value: Any, *, minimum: int | None = None) -> None:
 class AppConfig:
     source_lang: str = "auto"
     target_lang: str = "zh"
-    use_context: bool = False
     collapse_newlines: bool = False
     output_mode: str = "translations_only"
     translation_mode: str = "normal"
@@ -53,7 +52,6 @@ class AppConfig:
     def __post_init__(self) -> None:
         _require_string_choice("source_lang", self.source_lang, LANGUAGES)
         _require_string_choice("target_lang", self.target_lang, TARGET_LANGUAGES)
-        _require_bool("use_context", self.use_context)
         _require_bool("collapse_newlines", self.collapse_newlines)
         _require_string_choice("output_mode", self.output_mode, OUTPUT_MODES)
         _require_string_choice("translation_mode", self.translation_mode, TRANSLATION_MODES)
@@ -78,7 +76,6 @@ class TranslationRequest:
     text: str
     source_lang: str = "auto"
     target_lang: str = "zh"
-    use_context: bool = False
     collapse_newlines: bool = False
     output_mode: str = "translations_only"
     translation_mode: str = "normal"
@@ -94,7 +91,6 @@ class TranslationRequest:
             raise ValueError("Invalid text: expected string.")
         _require_string_choice("source_lang", self.source_lang, LANGUAGES)
         _require_string_choice("target_lang", self.target_lang, TARGET_LANGUAGES)
-        _require_bool("use_context", self.use_context)
         _require_bool("collapse_newlines", self.collapse_newlines)
         _require_string_choice("output_mode", self.output_mode, OUTPUT_MODES)
         _require_string_choice("translation_mode", self.translation_mode, TRANSLATION_MODES)

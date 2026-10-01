@@ -110,8 +110,21 @@ def cmd_translate_stream() -> int:
     payload = read_stdin_json()
     TranslationRequest, _ = get_translation_types()
     request = TranslationRequest(**payload)
+    status = 0
     for event in get_translation_service().stream_translate(request):
         write_json_line(event)
+        if event["event"] == "error":
+            status = 1
+    return status
+
+
+def cmd_list_models() -> int:
+    from backend import LOCAL_HOST, OllamaBackend, OllamaBackendOptions
+
+    payload = read_stdin_json()
+    host = payload.get("host", "") if payload.get("mode") == "http" else LOCAL_HOST
+    backend = OllamaBackend(OllamaBackendOptions(model="", host=str(host)))
+    write_json({"models": backend.list_models()})
     return 0
 
 
@@ -145,6 +158,7 @@ def main() -> int:
             "save-config",
             "translate",
             "translate-stream",
+            "list-models",
             "read-clipboard",
             "hotkey-listener",
         ],
@@ -163,6 +177,8 @@ def main() -> int:
             return cmd_translate()
         if args.command == "translate-stream":
             return cmd_translate_stream()
+        if args.command == "list-models":
+            return cmd_list_models()
         if args.command == "read-clipboard":
             return cmd_read_clipboard()
         if args.command == "hotkey-listener":

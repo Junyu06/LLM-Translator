@@ -1,278 +1,118 @@
-# hy_translator/backend/ollama_backend.py
+"""Talk to an Ollama server over its HTTP API.
+
+"Local" mode is the same API on this machine, so there is one code path.
+"""
 
 from __future__ import annotations
+
+import json
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
-from enum import Enum
-import sys
-from typing import Any, Dict
+from typing import Any, Dict, Iterator, List
 
-from .errors import BackendError, BackendUnavailableError, BackendRequestError, ModelNotFoundError
+from .errors import BackendRequestError, BackendUnavailableError, ModelNotFoundError
 
-
-class OllamaMode(str, Enum):
-    LOCAL = "local"  # python package: ollama.chat(...)
-    HTTP = "http"    # remote or custom host via HTTP API
+LOCAL_HOST = "http://127.0.0.1:11434"
 
 
 @dataclass
 class OllamaBackendOptions:
-    mode: OllamaMode = OllamaMode.LOCAL
-    model: str = "demonbyron/HY-MT1.5-1.8B"
-
-    # chat options (temperature, top_p, num_ctx, repeat_penalty, ...)
+    model: str
+    host: str = LOCAL_HOST
+    # Greedy decoding: the model cards of Index-Translate and Hy-MT2 evaluate with it.
     options: Dict[str, Any] = field(default_factory=lambda: {"temperature": 0.0})
-
-    # only for HTTP mode
-    host: str = "http://127.0.0.1:11434"
     timeout_sec: int = 60
 
 
 class OllamaBackend:
-    """
-    Backend that exposes a simple generate(prompt)->raw_text API for the pipeline.
-
-    - LOCAL mode uses `ollama` python package.
-    - HTTP mode uses Ollama REST API (supports remote host).
-    """
-
-    def __init__(self, cfg: OllamaBackendOptions = OllamaBackendOptions()):
+    def __init__(self, cfg: OllamaBackendOptions):
         self.cfg = cfg
 
-    def generate(self, prompt: str) -> str:
+    @property
+    def base_url(self) -> str:
+        return self.cfg.host.strip().rstrip("/") or LOCAL_HOST
+
+    def stream_chat(self, messages: List[dict]) -> Iterator[str]:
+        """Yield reply text as it arrives.
+
+        `think: false` matters for Index-Translate: Ollama treats it as a
+        reasoning model, and without the flag the rendered prompt differs
+        from the format the model was trained on. Models without a thinking
+        mode ignore the flag.
         """
-        For your pipeline: generate(prompt) -> raw model output text.
-        """
-        messages = [{"role": "user", "content": prompt}]
-        return self.chat(messages)
-
-    def stream_generate(self, prompt: str):
-        """
-        Streaming generator: yields raw text chunks.
-        """
-        messages = [{"role": "user", "content": prompt}]
-        return self.stream_chat(messages)
-
-    def chat(self, messages: list[dict]) -> str:
-        if self.cfg.mode == OllamaMode.LOCAL:
-            return self._chat_local(messages)
-        return self._chat_http(messages)
-
-    def stream_chat(self, messages: list[dict]):
-        if self.cfg.mode == OllamaMode.LOCAL:
-            return self._chat_local_stream(messages)
-        return self._chat_http_stream(messages)
-
-    # ---------- LOCAL (python package) ----------
-
-    def _chat_local(self, messages: list[dict]) -> str:
-        if sys.platform.startswith("win"):
-            return self._chat_http(messages)
-        try:
-            import ollama  # type: ignore
-        except Exception as e:
-            raise BackendUnavailableError(
-                "Local mode requires `pip install ollama`.",
-                code="dependency_missing",
-            ) from e
-
-        try:
-            resp = ollama.chat(
-                model=self.cfg.model,
-                messages=messages,
-                options=dict(self.cfg.options) if self.cfg.options else None,
-            )
-            # resp["message"]["content"]
-            msg = resp.get("message", {})
-            content = msg.get("content")
-            if content is None:
-                raise BackendRequestError(
-                    f"Unexpected ollama.chat response: {resp}",
-                    code="unexpected_backend_response",
-                )
-            return content
-        except BackendError:
-            raise
-        except TimeoutError as e:
-            raise BackendRequestError(f"ollama.chat timed out: {e}", code="backend_timeout") from e
-        except OSError as e:
-            raise BackendUnavailableError(f"ollama.chat unavailable: {e}") from e
-        except Exception as e:
-            # ollama python client errors are not super standardized; keep message
-            raise BackendRequestError(f"ollama.chat failed: {e}") from e
-
-    def _chat_local_stream(self, messages: list[dict]):
-        if sys.platform.startswith("win"):
-            return self._chat_http_stream(messages)
-        try:
-            import ollama  # type: ignore
-        except Exception as e:
-            raise BackendUnavailableError(
-                "Local mode requires `pip install ollama`.",
-                code="dependency_missing",
-            ) from e
-
-        try:
-            resp = ollama.chat(
-                model=self.cfg.model,
-                messages=messages,
-                options=dict(self.cfg.options) if self.cfg.options else None,
-                stream=True,
-            )
-            for chunk in resp:
-                msg = chunk.get("message", {})
-                content = msg.get("content")
-                if content:
-                    yield content
-        except BackendError:
-            raise
-        except TimeoutError as e:
-            raise BackendRequestError(
-                f"ollama.chat(stream) timed out: {e}",
-                code="backend_timeout",
-            ) from e
-        except OSError as e:
-            raise BackendUnavailableError(f"ollama.chat(stream) unavailable: {e}") from e
-        except Exception as e:
-            raise BackendRequestError(f"ollama.chat(stream) failed: {e}") from e
-
-    # ---------- HTTP (remote host) ----------
-
-    def _chat_http(self, messages: list[dict]) -> str:
-        import json
-        import urllib.request
-        import urllib.error
-
-        base = self.cfg.host.rstrip("/")
-        url = f"{base}/api/chat"
-
-        payload = {
-            "model": self.cfg.model,
-            "messages": messages,
-            "stream": False,
-            "options": dict(self.cfg.options),
-        }
-
-        body = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=self.cfg.timeout_sec) as resp:
-                data = resp.read().decode("utf-8")
-                obj = json.loads(data) if data else {}
-        except urllib.error.HTTPError as e:
-            msg = e.read().decode("utf-8", errors="ignore")
-            if e.code == 404:
-                raise ModelNotFoundError(msg) from e
-            raise BackendRequestError(f"Ollama HTTP {e.code}: {msg}") from e
-        except TimeoutError as e:
-            raise BackendRequestError(f"Ollama HTTP timed out: {e}", code="backend_timeout") from e
-        except urllib.error.URLError as e:
-            raise BackendUnavailableError(f"Ollama not reachable: {base}") from e
-        except json.JSONDecodeError as e:
-            raise BackendRequestError(
-                f"Invalid JSON from Ollama HTTP response: {e}",
-                code="invalid_backend_json",
-            ) from e
-        except OSError as e:
-            raise BackendUnavailableError(f"Ollama not reachable: {base}") from e
-
-        # Ollama /api/chat returns {"message": {"role": "...", "content": "..."}, ...}
-        msg = obj.get("message", {})
-        content = msg.get("content")
-        if content is None:
-            raise BackendRequestError(
-                f"Unexpected /api/chat response: {obj}",
-                code="unexpected_backend_response",
-            )
-        return content
-
-    def _chat_http_stream(self, messages: list[dict]):
-        import json
-        import urllib.request
-        import urllib.error
-
-        base = self.cfg.host.rstrip("/")
-        url = f"{base}/api/chat"
-
         payload = {
             "model": self.cfg.model,
             "messages": messages,
             "stream": True,
+            "think": False,
             "options": dict(self.cfg.options),
         }
-
-        body = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=self.cfg.timeout_sec) as resp:
+        finished = False
+        with self._open("/api/chat", payload) as resp:
+            try:
                 for raw_line in resp:
-                    if not raw_line:
-                        continue
                     line = raw_line.decode("utf-8").strip()
                     if not line:
                         continue
                     obj = json.loads(line)
-                    if obj.get("done"):
-                        break
-                    msg = obj.get("message", {})
-                    content = msg.get("content")
+                    if obj.get("error"):
+                        raise BackendRequestError(f"Ollama: {obj['error']}", code="backend_stream_error")
+                    content = obj.get("message", {}).get("content")
                     if content:
                         yield content
-        except urllib.error.HTTPError as e:
-            msg = e.read().decode("utf-8", errors="ignore")
-            if e.code == 404:
-                raise ModelNotFoundError(msg) from e
-            raise BackendRequestError(f"Ollama HTTP {e.code}: {msg}") from e
-        except TimeoutError as e:
-            raise BackendRequestError(f"Ollama HTTP timed out: {e}", code="backend_timeout") from e
-        except urllib.error.URLError as e:
-            raise BackendUnavailableError(f"Ollama not reachable: {base}") from e
-        except json.JSONDecodeError as e:
+                    if obj.get("done"):
+                        finished = True
+                        break
+            except json.JSONDecodeError as e:
+                raise BackendRequestError(
+                    f"Invalid JSON from Ollama stream: {e}",
+                    code="invalid_backend_json",
+                ) from e
+            except TimeoutError as e:
+                raise BackendRequestError(f"Ollama timed out: {e}", code="backend_timeout") from e
+            except OSError as e:
+                raise BackendUnavailableError(f"Ollama connection lost: {self.base_url}") from e
+        if not finished:
             raise BackendRequestError(
-                f"Invalid JSON from Ollama HTTP stream: {e}",
-                code="invalid_backend_json",
-            ) from e
-        except OSError as e:
-            raise BackendUnavailableError(f"Ollama not reachable: {base}") from e
+                "Ollama stopped before the reply finished.",
+                code="backend_stream_incomplete",
+            )
 
-    # Optional helpers (nice for UI)
-    def is_available(self) -> bool:
-        if self.cfg.mode == OllamaMode.LOCAL:
-            # Local mode still needs the daemon; simplest is try a tiny call
+    def list_models(self) -> List[str]:
+        with self._open("/api/tags", None, timeout=5) as resp:
             try:
-                _ = self._chat_local([{"role": "user", "content": "ping"}])
-                return True
-            except Exception:
-                return False
+                obj = json.loads(resp.read().decode("utf-8") or "{}")
+            except json.JSONDecodeError as e:
+                raise BackendRequestError(f"Invalid JSON from Ollama: {e}", code="invalid_backend_json") from e
+        return sorted(m["name"] for m in obj.get("models", []) if isinstance(m, dict) and m.get("name"))
 
-        # HTTP mode: call /api/version
-        import json
-        import urllib.request
-        import urllib.error
-
-        base = self.cfg.host.rstrip("/")
-        url = f"{base}/api/version"
-        body = json.dumps({}).encode("utf-8")
+    def _open(self, path: str, payload: dict | None, timeout: int | None = None):
+        url = f"{self.base_url}{path}"
+        data = None if payload is None else json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             url,
-            data=body,
+            data=data,
             headers={"Content-Type": "application/json"},
-            method="POST",
+            method="GET" if payload is None else "POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                _ = resp.read()
-            return True
-        except Exception:
-            return False
+            return urllib.request.urlopen(req, timeout=timeout or self.cfg.timeout_sec)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore")
+            message = _error_message(body) or f"HTTP {e.code}"
+            if e.code == 404:
+                raise ModelNotFoundError(message) from e
+            raise BackendRequestError(f"Ollama HTTP {e.code}: {message}") from e
+        except TimeoutError as e:
+            raise BackendRequestError(f"Ollama timed out: {e}", code="backend_timeout") from e
+        except (urllib.error.URLError, OSError) as e:
+            raise BackendUnavailableError(f"Ollama not reachable: {self.base_url}") from e
+
+
+def _error_message(body: str) -> str:
+    try:
+        obj = json.loads(body)
+    except json.JSONDecodeError:
+        return body.strip()
+    return str(obj.get("error", "")).strip() if isinstance(obj, dict) else body.strip()

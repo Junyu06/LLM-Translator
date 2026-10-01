@@ -1,16 +1,10 @@
+"""Clean up what a translation model returns around the translation itself."""
+
 import re
-from dataclasses import dataclass
 
-
-@dataclass
-class PostProcessOptions:
-    prefer_last_marker: bool = True  # 有多个“译文”时取最后一个
-    strip_quotes: bool = True
-    remove_leading_labels: bool = True
-
-
-_MARKERS = [
-    "译文：", "译文:", "译文",
+_LABELS = [
+    "译文：", "译文:",
+    "翻译：", "翻译:",
     "Translation:", "Translation：", "translation:",
     "Output:", "输出：", "输出:",
 ]
@@ -20,51 +14,44 @@ _QUOTE_PAIRS = {
     "'": "'",
     "“": "”",
     "‘": "’",
+    "「": "」",
 }
 
+_THINK_RE = re.compile(r"^\s*<think>.*?</think>\s*", re.DOTALL)
 
-def _strip_leading_marker(text: str) -> str:
-    stripped = text.lstrip()
-    for mk in sorted(_MARKERS, key=len, reverse=True):
-        if stripped.startswith(mk):
-            return stripped[len(mk):].strip()
+
+def strip_reasoning(text: str) -> str:
+    """Drop a leading <think> block in case the server ignored think=false."""
+    return _THINK_RE.sub("", text, count=1)
+
+
+def _strip_leading_label(text: str) -> str:
+    for label in sorted(_LABELS, key=len, reverse=True):
+        if text.startswith(label):
+            return text[len(label):].lstrip()
     return text
 
 
-def _strip_paired_wrapping_quotes(text: str) -> str:
-    stripped = text.strip()
-    if len(stripped) < 2:
-        return stripped
-
-    closing = _QUOTE_PAIRS.get(stripped[0])
-    if closing is not None and stripped[-1] == closing:
-        return stripped[1:-1].strip()
-    return stripped
+def _is_wrapped_in_quotes(text: str) -> bool:
+    return len(text) >= 2 and _QUOTE_PAIRS.get(text[0]) == text[-1]
 
 
-def extract_translation(raw: str, opt: PostProcessOptions = PostProcessOptions()) -> str:
-    if raw is None:
+def extract_translation(raw: str, source: str = "", *, keep_format: bool = False) -> str:
+    """Return the translation without labels, wrapping quotes, or stray blank lines.
+
+    Wrapping quotes are removed only when the source was not quoted itself, so
+    a translated quotation keeps its quotes. `keep_format` leaves Markdown
+    output untouched apart from surrounding whitespace.
+    """
+    if not raw:
         return ""
-    text = raw.strip()
-    if not text:
-        return ""
+    text = strip_reasoning(raw).strip()
+    if keep_format or not text:
+        return text
 
-    # 1) 只在输出开头识别 marker，避免截断正文里的 "Translation:" 等内容。
-    if opt.remove_leading_labels:
-        text = _strip_leading_marker(text)
+    text = _strip_leading_label(text)
+    if _is_wrapped_in_quotes(text) and not _is_wrapped_in_quotes(source.strip()):
+        text = text[1:-1].strip()
 
-    # 2) 如果模型把“原文：...”也吐出来了，尝试截断掉原文块（保守策略）
-    # 仅当出现明显标签时截断，避免误删正文
-    if opt.remove_leading_labels:
-        # 去掉开头一些常见标签
-        text = re.sub(r"^\s*(assistant|模型|翻译|译文)\s*[:：]\s*", "", text, flags=re.IGNORECASE).strip()
-
-    # 3) 去掉成对引号包裹
-    if opt.strip_quotes:
-        text = _strip_paired_wrapping_quotes(text)
-
-    # 4) 最后清理多余空白
     text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-
-    return text
+    return re.sub(r"\n{3,}", "\n\n", text).strip()

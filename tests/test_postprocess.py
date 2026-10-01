@@ -2,43 +2,40 @@ from __future__ import annotations
 
 import unittest
 
-from core.postprocess import PostProcessOptions, extract_translation
+from core.postprocess import extract_translation
 
 
 class PostProcessTests(unittest.TestCase):
-    def test_body_translation_marker_is_preserved(self):
+    def test_leading_label_is_removed(self):
+        self.assertEqual(extract_translation("译文：你好"), "你好")
+        self.assertEqual(extract_translation("Translation: Hello"), "Hello")
+
+    def test_label_inside_body_is_preserved(self):
         raw = "Translation: The body says Translation: keep this phrase."
+        self.assertEqual(extract_translation(raw), "The body says Translation: keep this phrase.")
 
-        self.assertEqual(
-            extract_translation(raw),
-            "The body says Translation: keep this phrase.",
-        )
+    def test_text_starting_with_the_word_translation_is_kept(self):
+        # Only labels with a colon are stripped; "译文是..." is a real sentence.
+        self.assertEqual(extract_translation("译文是作者自己校对的。"), "译文是作者自己校对的。")
 
-    def test_marker_is_extracted_only_at_start_after_whitespace(self):
-        raw = "Intro sentence.\n\nTranslation: this is part of the body."
+    def test_wrapping_quotes_added_by_the_model_are_removed(self):
+        self.assertEqual(extract_translation('"Hello"', "你好"), "Hello")
+        self.assertEqual(extract_translation("“你好”", "Hello"), "你好")
 
-        self.assertEqual(extract_translation(raw), raw)
-
-    def test_marker_removal_can_be_disabled(self):
-        self.assertEqual(
-            extract_translation(
-                "Translation: # Title",
-                PostProcessOptions(remove_leading_labels=False, strip_quotes=False),
-            ),
-            "Translation: # Title",
-        )
-
-    def test_paired_wrapping_quotes_are_removed(self):
-        self.assertEqual(extract_translation('"Hello"'), "Hello")
-        self.assertEqual(extract_translation("'Hello'"), "Hello")
-        self.assertEqual(extract_translation("“Hello”"), "Hello")
-        self.assertEqual(extract_translation("‘Hello’"), "Hello")
+    def test_quotes_that_were_in_the_source_are_kept(self):
+        source = '"I never said it was a bad idea," she said. "I said it was a bad lab."'
+        raw = "“我从没说过这是个坏主意，”她说，“我说的是实验室很糟。”"
+        self.assertEqual(extract_translation(raw, source), raw)
 
     def test_unpaired_quotes_are_preserved(self):
         self.assertEqual(extract_translation('"Hello'), '"Hello')
-        self.assertEqual(extract_translation("Hello'"), "Hello'")
-        self.assertEqual(extract_translation("“Hello"), "“Hello")
         self.assertEqual(extract_translation("Hello’"), "Hello’")
+
+    def test_think_block_is_dropped(self):
+        self.assertEqual(extract_translation("<think>\n\n</think>\n\n你好"), "你好")
+
+    def test_keep_format_leaves_markdown_alone(self):
+        self.assertEqual(extract_translation("Translation: # Title", keep_format=True), "Translation: # Title")
 
 
 if __name__ == "__main__":

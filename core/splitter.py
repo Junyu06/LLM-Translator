@@ -1,99 +1,111 @@
-from dataclasses import dataclass
+"""Split input into the units the pipeline translates and pairs up for display.
+
+Normal mode: one unit per paragraph. A paragraph is one line, except that
+lines broken in the middle of a sentence (text copied from a PDF, OCR output)
+are joined back first. Blank lines stay as passthrough units so the output
+keeps the original spacing.
+
+Markdown mode: one unit per Markdown block (heading, paragraph, list,
+blockquote, table). Only code is protected from translation.
+"""
+
+from __future__ import annotations
+
 import re
+import unicodedata
+from dataclasses import dataclass
 from typing import List
-
-
-@dataclass
-class SplitOptions:
-    strip_each_line: bool = True
-    drop_empty_lines: bool = True
-
-
-@dataclass
-class ContextOptions:
-    min_context_chars: int = 120   # 如果上一段不足这个长度，才补上上段
-    max_context_chars: int = 800   # 最终 context 上限（兜底裁剪）
 
 
 @dataclass
 class Segment:
     text: str
-    context: str = ""
     protected: bool = False
     kind: str = "text"
 
-
-def _normalize_lines(text: str, opt: SplitOptions) -> List[str]:
-    if not text:
-        return []
-    lines = text.splitlines()
-    if opt.strip_each_line:
-        lines = [ln.strip() for ln in lines]
-    if opt.drop_empty_lines:
-        lines = [ln for ln in lines if ln]
-    return lines
+    @property
+    def translatable(self) -> bool:
+        return not self.protected and bool(self.text.strip())
 
 
-def split_plain(text: str, opt: SplitOptions = SplitOptions()) -> List[Segment]:
+# ---------- normal mode ----------
+
+# A line ending in one of these closes a sentence or clause, so the next line
+# starts a new paragraph.
+_CLOSING_CHARS = set(".!?;:。！？；：…\"'”’)）]】」』")
+_LINE_MARKER_RE = re.compile(r"^(?:[-*+•·▪●]\s|\d+[.)、]\s?|[a-zA-Z][.)]\s|#{1,6}\s|>)")
+# Lines shorter than this share of the longest line in their run are headings
+# or short items, not lines wrapped by the page width.
+_WRAPPED_LINE_RATIO = 0.7
+_MIN_WRAP_WIDTH = 30
+
+
+def _width(text: str) -> int:
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
+
+
+def _is_cjk(ch: str) -> bool:
+    return unicodedata.east_asian_width(ch) in "WF"
+
+
+def _continues_on_next_line(line: str, wrap_width: int) -> bool:
+    stripped = line.rstrip()
+    if not stripped or stripped[-1] in _CLOSING_CHARS:
+        return False
+    return wrap_width >= _MIN_WRAP_WIDTH and _width(stripped) >= wrap_width * _WRAPPED_LINE_RATIO
+
+
+def _join_wrapped(left: str, right: str) -> str:
+    if _is_cjk(left[-1]) and _is_cjk(right[0]):
+        return left + right
+    if left.endswith("-") and left[-2:-1].isalpha():
+        return left + right
+    return f"{left} {right}"
+
+
+def reflow_lines(lines: List[str]) -> List[str]:
+    """Join lines that were broken by page width, not by the author.
+
+    `lines` is one run of non-blank, stripped lines.
     """
-    每段独立翻译，不带任何上文。
-    """
-    lines = _normalize_lines(text, opt)
-    return [Segment(text=ln, context="") for ln in lines]
+    if len(lines) < 2:
+        return list(lines)
+    wrap_width = max(_width(line) for line in lines)
+    paragraphs = [lines[0]]
+    previous = lines[0]
+    for line in lines[1:]:
+        if _continues_on_next_line(previous, wrap_width) and not _LINE_MARKER_RE.match(line):
+            paragraphs[-1] = _join_wrapped(paragraphs[-1], line)
+        else:
+            paragraphs.append(line)
+        previous = line
+    return paragraphs
 
 
-def split_with_limited_context(
-    text: str,
-    split_opt: SplitOptions = SplitOptions(),
-    ctx_opt: ContextOptions = ContextOptions(),
-) -> List[Segment]:
-    """
-    每段翻译时：
-    - 优先使用上一段作为 context
-    - 如果上一段字符数 < min_context_chars, 则补上上上一段
-    - 最多只用两段上文
-    """
-    lines = _normalize_lines(text, split_opt)
+def split_paragraphs(text: str) -> List[Segment]:
     segments: List[Segment] = []
+    run: List[str] = []
 
-    for i, ln in enumerate(lines):
-        context_parts: List[str] = []
+    def flush() -> None:
+        segments.extend(Segment(text=paragraph) for paragraph in reflow_lines(run))
+        run.clear()
 
-        # 上一段
-        if i - 1 >= 0:
-            prev_1 = lines[i - 1]
-            context_parts.insert(0, prev_1)
-
-            # 不够长 → 补上上段
-            if len(prev_1) < ctx_opt.min_context_chars and i - 2 >= 0:
-                prev_2 = lines[i - 2]
-                context_parts.insert(0, prev_2)
-
-        context = "\n".join(context_parts).strip()
-
-        # 最终兜底裁剪（保留末尾，更相关）
-        if ctx_opt.max_context_chars > 0 and len(context) > ctx_opt.max_context_chars:
-            context = context[-ctx_opt.max_context_chars:]
-
-        segments.append(Segment(text=ln, context=context))
-
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            run.append(stripped)
+            continue
+        flush()
+        segments.append(Segment(text="", protected=True, kind="blank"))
+    flush()
     return segments
 
 
+# ---------- Markdown mode ----------
+
 _FENCE_RE = re.compile(r"^(?P<indent> {0,3})(?P<fence>`{3,}|~{3,})")
 _LIST_MARKER_RE = re.compile(r"^ {0,3}(?:[-+*]\s+\S|\d+[.)]\s+\S)")
-
-
-def _segment_text(lines: List[str], protected: bool = False, kind: str = "text") -> Segment:
-    return Segment(text="\n".join(lines), context="", protected=protected, kind=kind)
-
-
-def _apply_segment_options(lines: List[str], opt: SplitOptions) -> List[str]:
-    if opt.strip_each_line:
-        lines = [ln.strip() for ln in lines]
-    if opt.drop_empty_lines:
-        lines = [ln for ln in lines if ln]
-    return lines
+_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
 
 
 def _is_blank(line: str) -> bool:
@@ -110,6 +122,10 @@ def _is_list_marker(line: str) -> bool:
 
 def _is_list_continuation(line: str) -> bool:
     return line.startswith("  ") or line.startswith("\t")
+
+
+def _is_heading(line: str) -> bool:
+    return _HEADING_RE.match(line) is not None
 
 
 def _is_table_separator(line: str) -> bool:
@@ -132,25 +148,25 @@ def _is_table_start(lines: List[str], index: int) -> bool:
     )
 
 
-def _starts_non_lazy_block(lines: List[str], index: int) -> bool:
+def _starts_new_block(lines: List[str], index: int) -> bool:
+    """Lines that end a lazy continuation of a list or blockquote."""
     line = lines[index]
     return (
         _FENCE_RE.match(line) is not None
         or _is_indented(line)
         or _is_table_start(lines, index)
+        or _is_heading(line)
     )
 
 
 def _take_fenced_code(lines: List[str], start: int) -> tuple[List[str], int]:
-    first = lines[start]
-    match = _FENCE_RE.match(first)
+    match = _FENCE_RE.match(lines[start])
     if match is None:
-        return [first], start + 1
+        return [lines[start]], start + 1
 
     fence = match.group("fence")
     fence_char = fence[0]
-    min_length = len(fence)
-    close_re = re.compile(rf"^ {{0,3}}{re.escape(fence_char) * min_length}{fence_char}*[ \t]*$")
+    close_re = re.compile(rf"^ {{0,3}}{re.escape(fence_char) * len(fence)}{fence_char}*[ \t]*$")
 
     index = start + 1
     while index < len(lines):
@@ -201,7 +217,7 @@ def _take_blockquote(lines: List[str], start: int) -> tuple[List[str], int]:
             block.append(line)
             index += 1
             continue
-        if not _is_blank(line) and not _starts_non_lazy_block(lines, index):
+        if not _is_blank(line) and not _starts_new_block(lines, index) and not _is_list_marker(line):
             block.append(line)
             index += 1
             continue
@@ -220,17 +236,17 @@ def _take_list(lines: List[str], start: int) -> tuple[List[str], int]:
 
     while index < len(lines):
         line = lines[index]
-        if _is_list_marker(line) or _is_list_continuation(line):
+        if _is_list_marker(line) or (_is_list_continuation(line) and not _is_blank(line)):
             block.append(line)
             index += 1
             continue
-        if not _is_blank(line) and not _starts_non_lazy_block(lines, index):
+        if not _is_blank(line) and not _starts_new_block(lines, index) and not line.lstrip().startswith(">"):
             block.append(line)
             index += 1
             continue
         if _is_blank(line) and index + 1 < len(lines):
             next_line = lines[index + 1]
-            if _is_list_marker(next_line) or _is_list_continuation(next_line):
+            if _is_list_marker(next_line) or (_is_list_continuation(next_line) and not _is_indented(next_line)):
                 block.append(line)
                 index += 1
                 continue
@@ -247,12 +263,12 @@ def _take_text(lines: List[str], start: int) -> tuple[List[str], int]:
         line = lines[index]
         if _is_blank(line):
             break
-        if (
+        if block and (
             _FENCE_RE.match(line)
-            or _is_indented(line)
             or _is_table_start(lines, index)
             or line.lstrip().startswith(">")
             or _is_list_marker(line)
+            or _is_heading(line)
         ):
             break
         block.append(line)
@@ -261,16 +277,8 @@ def _take_text(lines: List[str], start: int) -> tuple[List[str], int]:
     return block, index
 
 
-def split_markdown_blocks(
-    text: str,
-    opt: SplitOptions = SplitOptions(strip_each_line=False, drop_empty_lines=False),
-) -> List[Segment]:
-    """
-    Split Markdown into translation-ready blocks.
-
-    Code, table, blockquote, and list structures are protected passthrough
-    segments so later translation stages can skip them without losing layout.
-    """
+def split_markdown_blocks(text: str) -> List[Segment]:
+    """Split Markdown into blocks. Code blocks are protected; everything else is translated."""
     if not text:
         return []
 
@@ -285,48 +293,28 @@ def split_markdown_blocks(
             continue
 
         protected = False
-        kind = "text"
-
         if _FENCE_RE.match(line):
             block, index = _take_fenced_code(lines, index)
-            protected = True
-            kind = "fenced_code"
+            protected, kind = True, "fenced_code"
         elif _is_indented(line):
             block, index = _take_indented_code(lines, index)
-            protected = True
-            kind = "indented_code"
+            protected, kind = True, "indented_code"
+        elif _is_heading(line):
+            block, index = [line], index + 1
+            kind = "heading"
         elif _is_table_start(lines, index):
             block, index = _take_table(lines, index)
-            protected = True
             kind = "table"
         elif line.lstrip().startswith(">"):
             block, index = _take_blockquote(lines, index)
-            protected = True
             kind = "blockquote"
         elif _is_list_marker(line):
             block, index = _take_list(lines, index)
-            protected = True
             kind = "list"
         else:
             block, index = _take_text(lines, index)
+            kind = "text"
 
-        block = _apply_segment_options(block, opt)
-        if block or not opt.drop_empty_lines:
-            segments.append(_segment_text(block, protected=protected, kind=kind))
+        segments.append(Segment(text="\n".join(block), protected=protected, kind=kind))
 
     return segments
-
-if __name__ == "__main__":
-    text = """第一句很短
-    这是第二句，但它比较长一些，用来模拟超过阈值的情况。
-    第三句"""
-
-    segs = split_with_limited_context(
-        text,
-        ctx_opt=ContextOptions(min_context_chars=20)
-    )
-
-    for s in segs:
-        print("TEXT:", s.text)
-        print("CTX:", repr(s.context))
-        print("---")

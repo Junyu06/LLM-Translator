@@ -1,26 +1,31 @@
-# hy_translator/core/pipeline.py
+"""Translate segments a chunk at a time and keep each translation paired with its source.
+
+Small translation models translate several paragraphs in one request more
+consistently (names, terms, pronouns) and faster than one request per
+paragraph with neighbouring paragraphs pasted in as "context". So the
+pipeline groups consecutive paragraphs into chunks, translates each chunk in
+one request with paragraphs separated by blank lines, and splits the
+translation back into paragraphs. When the paragraph count does not match,
+that chunk falls back to one request per paragraph so pairs never drift.
+
+The tail of the previous chunk goes along as an earlier chat turn, which
+carries names and terms across chunk boundaries.
+"""
 
 from __future__ import annotations
-from dataclasses import dataclass, field
+
+import re
+import unicodedata
+from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Iterator, List
 
-from .splitter import (
-    SplitOptions,
-    ContextOptions,
-    Segment,
-    split_markdown_blocks,
-    split_plain,
-    split_with_limited_context,
-)
-from .prompt import PromptOptions, build_prompt
-from .postprocess import PostProcessOptions, extract_translation
+from .postprocess import extract_translation, strip_reasoning
+from .splitter import Segment
 
+ChatStream = Callable[[List[dict]], Iterator[str]]
+PromptFor = Callable[[str], str]
 
-class SplitMode(str, Enum):
-    PLAIN = "plain"
-    CONTEXT = "context"  # prev1, optionally prev2
-    MARKDOWN = "markdown"
 
 class OutputMode(str, Enum):
     TRANSLATIONS_ONLY = "translations_only"
@@ -28,299 +33,179 @@ class OutputMode(str, Enum):
 
 
 @dataclass
+class PipelineOptions:
+    # Source budget per request. Prompt, previous turn and output must fit the
+    # 4096-token default context of Ollama; translation output is about as long
+    # as the source in tokens.
+    chunk_tokens: int = 700
+    max_chunk_segments: int = 40
+    history_tokens: int = 250
+    markdown: bool = False
+
+
+@dataclass
 class AlignedPair:
     source: str
     target: str
-    context: str = ""   # 仅 debug 或 UI 需要时用
-    prompt: str = ""    # debug
-    raw: str = ""       # debug
-
-@dataclass
-class SegmentReport:
-    index: int
-    source: str
-    expected_context: str
-    prompt: str
-    raw: str
-    extracted: str
-
-    prompt_contains_context: bool
-    used_contextual_template: bool  # 参考上面的信息... 这句是否出现
 
 
 @dataclass
-class PipelineStreamUpdate:
-    pairs: List[AlignedPair]
-    total_segments: int
-    completed_segments: int
-    partial: bool
-    active_segment_index: int | None
-    active_segment_source: str | None
-    active_segment_target: str
-    segment_status: str
-    error: Exception | None = None
-
-@dataclass
-class PipelineOptions:
-    split_mode: SplitMode = SplitMode.PLAIN
-
-    # ⚠️ 用 default_factory，避免多个 PipelineOptions 共享同一个对象
-    split_opt: SplitOptions = field(default_factory=SplitOptions)
-    ctx_opt: ContextOptions = field(default_factory=ContextOptions)
-    prompt_opt: PromptOptions = field(default_factory=PromptOptions)
-    post_opt: PostProcessOptions = field(default_factory=PostProcessOptions)
-
-    keep_debug: bool = False
-    join_with: str = "\n"
-    skip_empty_segments: bool = True
+class Progress:
+    targets: List[str]
+    done: List[bool]
+    completed: int
+    total: int
+    finished: bool = False
 
 
-GenerateFn = Callable[[str], str]
+def estimate_tokens(text: str) -> int:
+    wide = sum(1 for ch in text if unicodedata.east_asian_width(ch) in "WF")
+    return int(wide / 1.2 + (len(text) - wide) / 3.5) + 1
 
 
-def make_segments(text: str, opt: PipelineOptions) -> List[Segment]:
-    if opt.split_mode == SplitMode.MARKDOWN:
-        return split_markdown_blocks(text)
-    if opt.split_mode == SplitMode.CONTEXT:
-        return split_with_limited_context(text, split_opt=opt.split_opt, ctx_opt=opt.ctx_opt)
-    return split_plain(text, opt=opt.split_opt)
+def plan_chunks(segments: List[Segment], opt: PipelineOptions) -> List[List[int]]:
+    """Group translatable segments into chunks. Code blocks end a chunk; blank lines do not."""
+    chunks: List[List[int]] = []
+    current: List[int] = []
+    tokens = 0
+    for index, segment in enumerate(segments):
+        if segment.protected and segment.kind != "blank":
+            if current:
+                chunks.append(current)
+            current, tokens = [], 0
+            continue
+        if not segment.translatable:
+            continue
+        cost = estimate_tokens(segment.text)
+        if current and (tokens + cost > opt.chunk_tokens or len(current) >= opt.max_chunk_segments):
+            chunks.append(current)
+            current, tokens = [], 0
+        current.append(index)
+        tokens += cost
+    if current:
+        chunks.append(current)
+    return chunks
 
-@dataclass
-class PipelineReport:
-    split_mode: SplitMode
-    reports: List[SegmentReport] = field(default_factory=list)
 
-    def context_success_rate(self) -> float:
-        candidates = [r for r in self.reports if r.expected_context.strip()]
-        if not candidates:
-            return 1.0
-        ok = sum(
-            1 for r in candidates
-            if r.prompt_contains_context and r.used_contextual_template
-        )
-        return ok / len(candidates)
+def split_output(content: str, markdown: bool) -> List[str]:
+    """Split a chunk translation back into paragraphs.
 
-def run_pipeline(
-    text: str,
-    generate: Callable[[str], str],
+    Normal-mode paragraphs never contain a line break, so any line break
+    separates paragraphs. Markdown blocks can span lines, so only blank lines do.
+    """
+    if markdown:
+        return [part.strip() for part in re.split(r"\n\s*\n", content) if part.strip()]
+    return [line.strip() for line in content.splitlines() if line.strip()]
+
+
+def _visible(content: str) -> str:
+    """What to show while a reply is still streaming: nothing inside an open <think> block."""
+    stripped = content.lstrip()
+    if stripped.startswith("<think>") and "</think>" not in stripped:
+        return ""
+    return strip_reasoning(stripped)
+
+
+def iter_translation(
+    segments: List[Segment],
+    chat: ChatStream,
+    prompt_for: PromptFor,
     opt: PipelineOptions | None = None,
-    return_report: bool = False,
-):
-    if opt is None:
-        opt = PipelineOptions()
+) -> Iterator[Progress]:
+    opt = opt or PipelineOptions()
+    targets = ["" if segment.translatable else segment.text for segment in segments]
+    done = [not segment.translatable for segment in segments]
+    total = sum(1 for segment in segments if segment.translatable)
+    completed = 0
+    history: List[dict] = []
 
-    segments = make_segments(text, opt)
-    pairs: List[AlignedPair] = []
+    def snapshot(finished: bool = False) -> Progress:
+        return Progress(list(targets), list(done), completed, total, finished)
 
-    report: PipelineReport | None = (
-        PipelineReport(split_mode=opt.split_mode)
-        if return_report
-        else None
-    )
+    def stream(messages: List[dict], on_text: Callable[[str], None]) -> Iterator[str]:
+        content = ""
+        for piece in chat(messages):
+            content += piece
+            on_text(_visible(content))
+            yield content
 
-    for i, seg in enumerate(segments):
-        if seg.protected or (not seg.text.strip() and not opt.skip_empty_segments):
-            pairs.append(AlignedPair(source=seg.text, target=seg.text))
-            if report is not None:
-                report.reports.append(
-                    SegmentReport(
-                        index=i,
-                        source=seg.text,
-                        expected_context=seg.context or "",
-                        prompt="",
-                        raw=seg.text,
-                        extracted=seg.text,
-                        prompt_contains_context=True,
-                        used_contextual_template=True,
-                    )
-                )
+    def clean(raw: str, index: int) -> str:
+        return extract_translation(raw, segments[index].text, keep_format=opt.markdown)
+
+    for chunk in plan_chunks(segments, opt):
+        sources = [segments[index].text for index in chunk]
+        request = {"role": "user", "content": prompt_for("\n\n".join(sources))}
+
+        def spread(visible: str, chunk: List[int] = chunk) -> None:
+            parts = [visible] if len(chunk) == 1 else split_output(visible, opt.markdown)
+            for slot, index in enumerate(chunk):
+                targets[index] = parts[slot] if slot < len(parts) else ""
+            if len(parts) > len(chunk):
+                targets[chunk[-1]] = "\n".join(parts[len(chunk) - 1:])
+
+        content = ""
+        for content in stream(history + [request], spread):
+            yield snapshot()
+
+        reply = strip_reasoning(content)
+        parts = [reply] if len(chunk) == 1 else split_output(reply, opt.markdown)
+        if len(parts) == len(chunk):
+            pairs = list(zip(chunk, parts))
+            for index, part in pairs:
+                targets[index] = clean(part, index)
+                done[index] = True
+            completed += len(chunk)
+            history = _previous_turn(chunk, segments, targets, prompt_for, opt)
+            yield snapshot()
             continue
 
-        if opt.skip_empty_segments and not seg.text.strip():
-            continue
+        # The model merged or split paragraphs: translate this chunk one paragraph at a time.
+        for index in chunk:
+            targets[index] = ""
+        for index in chunk:
+            request = {"role": "user", "content": prompt_for(segments[index].text)}
 
-        p_opt = PromptOptions(
-            source_lang=opt.prompt_opt.source_lang,
-            target_lang=opt.prompt_opt.target_lang,
-            preset=opt.prompt_opt.preset,
-            terminology=opt.prompt_opt.terminology,
-            context=seg.context,
-            src_text_with_format=opt.prompt_opt.src_text_with_format,
-        )
+            def show(visible: str, index: int = index) -> None:
+                targets[index] = visible
 
-        prompt = build_prompt(seg.text, p_opt)
-        raw = generate(prompt)
-        target = extract_translation(raw, opt.post_opt)
+            content = ""
+            for content in stream(history + [request], show):
+                yield snapshot()
+            targets[index] = clean(content, index)
+            done[index] = True
+            completed += 1
+            history = [request, {"role": "assistant", "content": targets[index]}]
+            yield snapshot()
 
-        pairs.append(
-            AlignedPair(
-                source=seg.text,
-                target=target,
-                context=seg.context if opt.keep_debug else "",
-                prompt=prompt if opt.keep_debug else "",
-                raw=raw if opt.keep_debug else "",
-            )
-        )
-
-        if report is not None:
-            expected_ctx = seg.context or ""
-            prompt_contains = (
-                True if not expected_ctx.strip()
-                else expected_ctx.strip() in prompt
-            )
-            used_contextual = (
-                True if not expected_ctx.strip()
-                else "参考上面的信息" in prompt
-            )
-
-            report.reports.append(
-                SegmentReport(
-                    index=i,
-                    source=seg.text,
-                    expected_context=expected_ctx,
-                    prompt=prompt,
-                    raw=raw,
-                    extracted=target,
-                    prompt_contains_context=prompt_contains,
-                    used_contextual_template=used_contextual,
-                )
-            )
-
-    if return_report:
-        return pairs, report
-    return pairs
+    yield snapshot(finished=True)
 
 
-def iter_pipeline(
-    text: str,
-    generate: Callable[[str], str],
-    opt: PipelineOptions | None = None,
-):
-    if opt is None:
-        opt = PipelineOptions()
-
-    segments = make_segments(text, opt)
-
-    for seg in segments:
-        if seg.protected or (not seg.text.strip() and not opt.skip_empty_segments):
-            yield AlignedPair(source=seg.text, target=seg.text)
-            continue
-
-        if opt.skip_empty_segments and not seg.text.strip():
-            continue
-
-        p_opt = PromptOptions(
-            source_lang=opt.prompt_opt.source_lang,
-            target_lang=opt.prompt_opt.target_lang,
-            preset=opt.prompt_opt.preset,
-            terminology=opt.prompt_opt.terminology,
-            context=seg.context,
-            src_text_with_format=opt.prompt_opt.src_text_with_format,
-        )
-
-        prompt = build_prompt(seg.text, p_opt)
-        raw = generate(prompt)
-        target = extract_translation(raw, opt.post_opt)
-
-        yield AlignedPair(
-            source=seg.text,
-            target=target,
-            context=seg.context if opt.keep_debug else "",
-            prompt=prompt if opt.keep_debug else "",
-            raw=raw if opt.keep_debug else "",
-        )
+def _previous_turn(
+    chunk: List[int],
+    segments: List[Segment],
+    targets: List[str],
+    prompt_for: PromptFor,
+    opt: PipelineOptions,
+) -> List[dict]:
+    """The last paragraphs of a chunk and their translations, as one earlier chat turn."""
+    tail: List[int] = []
+    tokens = 0
+    for index in reversed(chunk):
+        cost = estimate_tokens(segments[index].text)
+        if tokens + cost > opt.history_tokens:
+            break
+        tail.insert(0, index)
+        tokens += cost
+    if not tail:
+        return []
+    return [
+        {"role": "user", "content": prompt_for("\n\n".join(segments[i].text for i in tail))},
+        {"role": "assistant", "content": "\n\n".join(targets[i] for i in tail)},
+    ]
 
 
-def iter_streaming_pipeline(
-    text: str,
-    stream_generate: Callable[[str], Iterator[str]],
-    opt: PipelineOptions | None = None,
-    *,
-    segments: List[Segment] | None = None,
-) -> Iterator[PipelineStreamUpdate]:
-    if opt is None:
-        opt = PipelineOptions()
-
-    segments = segments if segments is not None else make_segments(text, opt)
-    total_segments = len(segments)
-    pairs: List[AlignedPair] = []
-
-    for index, seg in enumerate(segments):
-        if seg.protected or (not seg.text.strip() and not opt.skip_empty_segments):
-            pairs.append(AlignedPair(source=seg.text, target=seg.text))
-            yield PipelineStreamUpdate(
-                pairs=list(pairs),
-                total_segments=total_segments,
-                completed_segments=index + 1,
-                partial=False,
-                active_segment_index=index + 1,
-                active_segment_source=seg.text,
-                active_segment_target=seg.text,
-                segment_status="passthrough",
-            )
-            continue
-
-        if opt.skip_empty_segments and not seg.text.strip():
-            continue
-
-        p_opt = PromptOptions(
-            source_lang=opt.prompt_opt.source_lang,
-            target_lang=opt.prompt_opt.target_lang,
-            preset=opt.prompt_opt.preset,
-            terminology=opt.prompt_opt.terminology,
-            context=seg.context,
-            src_text_with_format=opt.prompt_opt.src_text_with_format,
-        )
-        prompt = build_prompt(seg.text, p_opt)
-
-        raw = ""
-        try:
-            for chunk in stream_generate(prompt):
-                raw += chunk
-                yield PipelineStreamUpdate(
-                    pairs=pairs + [AlignedPair(source=seg.text, target=raw)],
-                    total_segments=total_segments,
-                    completed_segments=index,
-                    partial=True,
-                    active_segment_index=index + 1,
-                    active_segment_source=seg.text,
-                    active_segment_target=raw,
-                    segment_status="streaming",
-                )
-
-            target = extract_translation(raw, opt.post_opt)
-            pairs.append(
-                AlignedPair(
-                    source=seg.text,
-                    target=target,
-                    context=seg.context if opt.keep_debug else "",
-                    prompt=prompt if opt.keep_debug else "",
-                    raw=raw if opt.keep_debug else "",
-                )
-            )
-            yield PipelineStreamUpdate(
-                pairs=list(pairs),
-                total_segments=total_segments,
-                completed_segments=index + 1,
-                partial=False,
-                active_segment_index=index + 1,
-                active_segment_source=seg.text,
-                active_segment_target=target,
-                segment_status="completed",
-            )
-        except Exception as exc:
-            yield PipelineStreamUpdate(
-                pairs=pairs + [AlignedPair(source=seg.text, target=raw)],
-                total_segments=total_segments,
-                completed_segments=index,
-                partial=False,
-                active_segment_index=index + 1,
-                active_segment_source=seg.text,
-                active_segment_target=raw,
-                segment_status="error",
-                error=exc,
-            )
-            raise
+def pairs_from(segments: List[Segment], targets: List[str]) -> List[AlignedPair]:
+    return [AlignedPair(source=segment.text, target=target) for segment, target in zip(segments, targets)]
 
 
 def join_translations(pairs: List[AlignedPair], join_with: str = "\n") -> str:
@@ -348,6 +233,7 @@ def join_interleaved(pairs: List[AlignedPair], join_with: str = "\n") -> str:
     if parts and parts[-1][1]:
         parts.pop()
     return join_with.join(text for text, _ in parts)
+
 
 def render_output(pairs: List[AlignedPair], mode: OutputMode, join_with: str = "\n") -> str:
     if mode == OutputMode.INTERLEAVED:

@@ -3,73 +3,59 @@ import unittest
 from core.splitter import split_markdown_blocks
 
 
+def kinds(text):
+    return [(segment.kind, segment.protected) for segment in split_markdown_blocks(text)]
+
+
 class MarkdownBlockSplitterTests(unittest.TestCase):
-    def test_groups_fenced_code_as_protected_segment(self):
+    def test_fenced_code_is_the_only_protected_block_type(self):
         text = "Intro paragraph.\n\n```python\nif value:\n    print(value)\n```\n\nOutro paragraph."
-
         segments = split_markdown_blocks(text)
-
-        self.assertEqual([segment.kind for segment in segments], ["text", "fenced_code", "text"])
-        self.assertFalse(segments[0].protected)
-        self.assertTrue(segments[1].protected)
+        self.assertEqual(kinds(text), [("text", False), ("fenced_code", True), ("text", False)])
         self.assertEqual(segments[1].text, "```python\nif value:\n    print(value)\n```")
 
-    def test_groups_indented_code_and_preserves_indentation(self):
+    def test_indented_code_is_protected_and_keeps_indentation(self):
         text = "Before\n\n    def example():\n        return 1\n\nAfter"
-
         segments = split_markdown_blocks(text)
-
-        self.assertEqual([segment.kind for segment in segments], ["text", "indented_code", "text"])
-        self.assertTrue(segments[1].protected)
+        self.assertEqual(kinds(text), [("text", False), ("indented_code", True), ("text", False)])
         self.assertEqual(segments[1].text, "    def example():\n        return 1")
 
-    def test_groups_markdown_table_as_protected_segment(self):
-        text = "Before\n\n| Name | Value |\n| --- | --- |\n| One | 1 |\n\nAfter"
-
-        segments = split_markdown_blocks(text)
-
-        self.assertEqual([segment.kind for segment in segments], ["text", "table", "text"])
-        self.assertTrue(segments[1].protected)
-        self.assertEqual(segments[1].text, "| Name | Value |\n| --- | --- |\n| One | 1 |")
-
-    def test_groups_blockquote_as_protected_segment(self):
-        text = "Before\n\n> Quote line one\n> Quote line two\n\nAfter"
-
-        segments = split_markdown_blocks(text)
-
-        self.assertEqual([segment.kind for segment in segments], ["text", "blockquote", "text"])
-        self.assertTrue(segments[1].protected)
-        self.assertEqual(segments[1].text, "> Quote line one\n> Quote line two")
-
-    def test_groups_list_with_indented_continuation_and_blank_line(self):
-        text = "Before\n\n- item one\n  continuation line\n\n  second paragraph\n- item two\n\nAfter"
-
-        segments = split_markdown_blocks(text)
-
-        self.assertEqual([segment.kind for segment in segments], ["text", "list", "text"])
-        self.assertTrue(segments[1].protected)
-        self.assertEqual(
-            segments[1].text,
-            "- item one\n  continuation line\n\n  second paragraph\n- item two",
+    def test_lists_quotes_and_tables_are_translated(self):
+        text = (
+            "- Download the app\n- Drag it into Applications\n\n"
+            "> Note: the first launch is slow.\n\n"
+            "| Option | Meaning |\n|---|---|\n| Fast | Lower quality |"
         )
+        self.assertEqual(kinds(text), [("list", False), ("blockquote", False), ("table", False)])
 
-    def test_groups_list_with_lazy_continuation(self):
-        text = "Before\n\n- item one\ncontinued line\n- item two\n\nAfter"
-
+    def test_heading_ends_a_list(self):
+        text = "- Keep\n# Translate heading\nNew paragraph"
         segments = split_markdown_blocks(text)
+        self.assertEqual([s.kind for s in segments], ["list", "heading", "text"])
+        self.assertEqual(segments[1].text, "# Translate heading")
 
-        self.assertEqual([segment.kind for segment in segments], ["text", "list", "text"])
-        self.assertTrue(segments[1].protected)
+    def test_heading_followed_by_paragraph_without_blank_line(self):
+        segments = split_markdown_blocks("## Install\nRun the installer.")
+        self.assertEqual([s.text for s in segments], ["## Install", "Run the installer."])
+
+    def test_list_with_indented_continuation_and_blank_line(self):
+        text = "Before\n\n- item one\n  continuation line\n\n  second paragraph\n- item two\n\nAfter"
+        segments = split_markdown_blocks(text)
+        self.assertEqual([s.kind for s in segments], ["text", "list", "text"])
+        self.assertEqual(segments[1].text, "- item one\n  continuation line\n\n  second paragraph\n- item two")
+
+    def test_list_with_lazy_continuation(self):
+        segments = split_markdown_blocks("Before\n\n- item one\ncontinued line\n- item two\n\nAfter")
         self.assertEqual(segments[1].text, "- item one\ncontinued line\n- item two")
 
-    def test_groups_blockquote_with_lazy_continuation(self):
-        text = "Before\n\n> quoted line\nlazy continuation\n> quoted again\n\nAfter"
-
-        segments = split_markdown_blocks(text)
-
-        self.assertEqual([segment.kind for segment in segments], ["text", "blockquote", "text"])
-        self.assertTrue(segments[1].protected)
+    def test_blockquote_with_lazy_continuation(self):
+        segments = split_markdown_blocks("Before\n\n> quoted line\nlazy continuation\n> quoted again\n\nAfter")
         self.assertEqual(segments[1].text, "> quoted line\nlazy continuation\n> quoted again")
+
+    def test_leading_indented_code_stays_code(self):
+        segments = split_markdown_blocks("    indented = True\n\nText")
+        self.assertEqual(kinds("    indented = True\n\nText"), [("indented_code", True), ("text", False)])
+        self.assertEqual(segments[0].text, "    indented = True")
 
 
 if __name__ == "__main__":
