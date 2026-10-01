@@ -28,18 +28,10 @@ export default function HistoryDrawer({ t, top, history, onOpen, onDelete, onCle
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const list = listRef.current;
-    if (list) list.scrollTop = savedScrollTop;
-    // However the drawer closes (its button, the mask, the toolbar), keep the position.
-    return () => {
-      if (list) savedScrollTop = list.scrollTop;
-    };
+    if (listRef.current) listRef.current.scrollTop = savedScrollTop;
   }, []);
 
-  const close = () => {
-    if (listRef.current) savedScrollTop = listRef.current.scrollTop;
-    onClose();
-  };
+  const close = () => onClose();
 
   const term = query.trim().toLowerCase();
   const items = term
@@ -61,7 +53,8 @@ export default function HistoryDrawer({ t, top, history, onOpen, onDelete, onCle
             </div>
           )}
         </div>
-        <div className="history-list" ref={listRef}>
+        {/* Saved while scrolling, so the position survives however the drawer closes. */}
+        <div className="history-list" ref={listRef} onScroll={(e) => { savedScrollTop = e.currentTarget.scrollTop; }}>
           {items.length === 0 ? (
             <div className="empty-hint">{history.length === 0 ? t("history_empty") : t("history_no_match")}</div>
           ) : (

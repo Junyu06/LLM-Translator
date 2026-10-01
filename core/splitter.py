@@ -249,11 +249,7 @@ def list_items(text: str) -> List[str]:
 # which never crosses a line or touches container markers.
 
 _recorder = threading.local()
-# A bare URL running right up to a link: starts after a space, a line start or
-# "(", and holds no brackets, backticks or unbalanced parentheses.
-_URL_BEFORE_RE = re.compile(
-    r"(?:^|[\s(])(?:https?://|www\.)[^\s()<>\[\]`]*(?:\([^\s()<>`]*\)[^\s()<>\[\]`]*)*$", re.IGNORECASE
-)
+_URL_START_RE = re.compile(r"https?://|www\.", re.IGNORECASE)
 
 
 def _recording(rule, label_offset: int, disable_nested: bool, url_attr: str):
@@ -268,7 +264,9 @@ def _recording(rule, label_offset: int, disable_nested: bool, url_attr: str):
         end = state.pos
         tail = state.src[label_end + 1:end]
         if tail.startswith("(") and tail.endswith(")"):
-            return ok  # an inline link already
+            # An inline link already; its destination is not plain text.
+            _recorder.not_text.append((state.src, start, end))
+            return ok
         # Pending plain text is flushed first, so the link is not always the first new token.
         token = next((t for t in state.tokens[first_token:] if t.type in ("link_open", "image")), None)
         url = token.attrGet(url_attr) if token else None
@@ -279,8 +277,33 @@ def _recording(rule, label_offset: int, disable_nested: bool, url_attr: str):
     return wrapped
 
 
+def _recording_code(state, silent):
+    start = state.pos
+    ok = rules_inline.backtick(state, silent)
+    if ok and not silent and getattr(_recorder, "spans", None) is not None:
+        _recorder.not_text.append((state.src, start, state.pos))
+    return ok
+
+
 _MD.inline.ruler.at("link", _recording(rules_inline.link, 0, True, "href"))
 _MD.inline.ruler.at("image", _recording(rules_inline.image, 1, False, "src"))
+_MD.inline.ruler.at("backticks", _recording_code)
+
+
+def _inside_bare_url(content: str, link_start: int, not_text: List[Tuple[int, int]]) -> bool:
+    """Whether a URL in plain text runs, without a space, up to the link.
+
+    The display renders such a URL as one autolink (GitHub style), the
+    brackets included. A URL inside a code span or a link destination is not
+    plain text and does not count.
+    """
+    run_start = link_start
+    while run_start > 0 and not content[run_start - 1].isspace() and content[run_start - 1] != "<":
+        run_start -= 1
+    for match in _URL_START_RE.finditer(content, run_start, link_start):
+        if not any(start <= match.start() < end for start, end in not_text):
+            return True
+    return False
 
 
 def _inline_destination(url: str, title: str) -> str:
@@ -312,8 +335,9 @@ def _content_line_starts(lines: List[str], first: int, content: str, cursors: di
         else:
             found = line.find(content_line, from_column)
             column = found if found >= 0 else None
-        if column is not None:
-            cursors[number] = column + len(content_line)
+        # A cell that cannot be placed (an escaped pipe, a tab) leaves the rest
+        # of its line unplaced too, so no later cell is looked for inside it.
+        cursors[number] = len(line) + 1 if column is None else column + len(content_line)
         starts.append(None if column is None else offset + column)
         offset += len(line) + 1
     return starts
@@ -331,9 +355,11 @@ def inline_reference_links(text: str) -> str:
         if token.type != "inline" or token.map is None:
             continue
         _recorder.spans = []
+        _recorder.not_text = []
         try:
             _MD.inline.parse(token.content, _MD, env, [])
             spans = _recorder.spans
+            not_text = [(start, end) for source, start, end in _recorder.not_text if source is token.content]
         finally:
             _recorder.spans = None
         # Placed even without links, so the next cell on the line is looked for after this one.
@@ -350,7 +376,7 @@ def inline_reference_links(text: str) -> str:
             if source is not token.content:
                 continue
             # Inside a bare URL the display (GFM autolinks) shows one link; leave it.
-            if _URL_BEFORE_RE.search(token.content[:link_start]):
+            if _inside_bare_url(token.content, link_start, not_text):
                 continue
             index = max(i for i, value in enumerate(content_offsets) if value <= start)
             if line_starts[index] is None or "\n" in token.content[start:end]:
