@@ -100,12 +100,23 @@ impl WindowsHotkeyListener {
     }
 
     pub fn stop(mut self) {
+        self.kill_child();
+        if let Some(join_handle) = self.join_handle.take() {
+            let _ = join_handle.join();
+        }
+    }
+
+    // Quitting: end the listener process but do not wait for the reader
+    // thread. It may be handling a trigger that waits on the main thread.
+    pub fn stop_without_waiting(mut self) {
+        self.kill_child();
+        self.join_handle.take();
+    }
+
+    fn kill_child(&self) {
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
             let _ = child.wait();
-        }
-        if let Some(join_handle) = self.join_handle.take() {
-            let _ = join_handle.join();
         }
     }
 }

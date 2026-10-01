@@ -266,9 +266,10 @@ export default function App() {
     };
     setRetranslating((prev) => new Set(prev).add(index));
     try {
-      const response = await translate({ ...requestFor(segment.source, configRef.current), context, temperature: 0.3 });
+      const response = await translate({ ...requestFor(segment.source, configRef.current), context, temperature: 0.3, as_block: true });
       if (runIdRef.current !== runId) return;
-      const target = response.output_text.trim();
+      // Keep leading indentation: a block cut from a list needs it to stay in the list.
+      const target = response.output_text.replace(/\s+$/, "");
       const next = segmentsRef.current.map((pair, i) => (i === index ? { ...pair, target, done: true } : pair));
       const joined = next.map((pair) => pair.target).join(configRef.current.translation_mode === "markdown" ? "\n\n" : "\n");
       segmentsRef.current = next;

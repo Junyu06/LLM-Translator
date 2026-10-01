@@ -543,12 +543,22 @@ fn show_main_window(app: &AppHandle) -> Result<(), String> {
 }
 
 fn quit_app(app: &AppHandle) {
+    app.state::<AppState>().quitting.store(true, Ordering::Relaxed);
+    release_for_exit(app);
+    app.exit(0);
+}
+
+// Everything this app started that would outlive it. Runs on the main thread
+// while quitting, so it never waits on the hotkey thread.
+fn release_for_exit(app: &AppHandle) {
     let state = app.state::<AppState>();
-    state.quitting.store(true, Ordering::Relaxed);
-    stop_hotkey_listener(&state);
+    let listener = state.hotkey_listener.lock().unwrap().take();
+    if let Some(_listener) = listener {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        _listener.stop_without_waiting();
+    }
     let _ = cancel_running_translation(app, &state, None, false);
     kill_bridge_processes(&state);
-    app.exit(0);
 }
 
 fn should_minimize_to_tray(app: &AppHandle) -> bool {
@@ -1593,12 +1603,7 @@ fn main() {
         }
         // Every way out (Cmd+Q, the app menu, the tray, closing the window)
         // ends the bridge processes this app started.
-        tauri::RunEvent::Exit => {
-            let state = _app.state::<AppState>();
-            stop_hotkey_listener(&state);
-            let _ = cancel_running_translation(_app, &state, None, false);
-            kill_bridge_processes(&state);
-        }
+        tauri::RunEvent::Exit => release_for_exit(_app),
         _ => {}
     });
 }

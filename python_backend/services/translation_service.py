@@ -62,7 +62,14 @@ class TranslationService:
             raise ValueError("Nothing to translate.")
 
         markdown = request.translation_mode == "markdown"
-        blocks = split_markdown_blocks(text) if markdown else self._trim_blank_edges(split_paragraphs(text))
+        if request.as_block:
+            # Splitting it again could read it differently out of context
+            # (an indented list continuation would look like code).
+            blocks = [Segment(text=text.strip("\n"), kind="list" if markdown else "text")]
+        elif markdown:
+            blocks = split_markdown_blocks(text)
+        else:
+            blocks = self._trim_blank_edges(split_paragraphs(text))
         segments = split_long_segments(blocks, LONG_PARAGRAPH_TOKENS)
         self._validate_request_budget(request, text, segments)
 

@@ -18,10 +18,10 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+import threading
+from typing import List, Tuple
 
-from markdown_it import MarkdownIt
-from markdown_it.common.utils import normalizeReference
+from markdown_it import MarkdownIt, rules_inline
 
 
 @dataclass
@@ -191,8 +191,8 @@ def split_markdown_blocks(text: str) -> List[Segment]:
     if not text:
         return []
 
-    env: dict = {}
-    tokens = _MD.parse(text, env)
+    text = inline_reference_links(text)
+    tokens = _MD.parse(text)
     lines = text.split("\n")
     segments: List[Segment] = []
     covered_until = 0
@@ -219,7 +219,7 @@ def split_markdown_blocks(text: str) -> List[Segment]:
         segments.append(Segment(text=block, protected=protected, kind=kind))
     add_definitions(len(lines))
 
-    return _inline_reference_links(segments, env.get("references", {}))
+    return segments
 
 
 def list_items(text: str) -> List[str]:
@@ -237,66 +237,112 @@ def list_items(text: str) -> List[str]:
     return ["\n".join(lines[bounds[i]:bounds[i + 1]]).rstrip("\n") for i in range(len(starts))]
 
 
-_DEFINITION_RE = re.compile(
-    r"""^ {0,3}\[(?P<label>[^\]]+)\]:[ \t]*(?P<url><[^>\n]*>|\S+)(?:[ \t]+(?P<title>"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$"""
-)
-# [text][label], [text][] and [text]; not the label half of another link, and
-# not an inline link or a definition.
-# Link text may hold one level of brackets: [the **[docs]**][site].
-_REFERENCE_LINK_RE = re.compile(
-    r"(?<![\]\\])\[(?P<text>(?:[^\[\]\\]|\\.|\[(?:[^\[\]\\]|\\.)*\])+)\](?:\[(?P<label>[^\[\]]*)\])?(?![(:\[])"
-)
-# Left as they are: code spans, inline link destinations, autolinks, bare URLs.
-_KEEP_RE = re.compile(r"(`+).+?\1|\]\([^)\n]*\)|<[^>\s]+>|https?://[^\s<>]+", re.DOTALL)
+# ---------- reference links ----------
+#
+# `[the docs][site]`, `[Site][]` and `[site]` only work next to their
+# definition, and a model translating `[常见问题][]` breaks the second and
+# third kind. So before splitting, every reference link becomes an inline link
+# (`[the docs](<https://...>)`). markdown-it-py finds them with the same
+# CommonMark rules that render them, so code spans, URLs, inline links and
+# nested brackets are handled the way the display handles them. Only the part
+# after the link text changes (`[site]`, `[]` or nothing becomes `(<url>)`),
+# which never crosses a line or touches container markers.
+
+_recorder = threading.local()
+_BARE_URL_RE = re.compile(r"(?:https?://|www\.)", re.IGNORECASE)
 
 
-def _link_targets(segments: List[Segment], references: Dict[str, dict]) -> Dict[str, str]:
-    """Label -> inline link destination. One-line definitions keep their exact
-    text (an `<...>` destination stays valid); others use markdown-it's parse."""
-    targets: Dict[str, str] = {}
-    for segment in segments:
-        if segment.kind != "link_definitions":
+def _recording(rule, label_offset: int, disable_nested: bool, url_attr: str):
+    def wrapped(state, silent):
+        start = state.pos
+        first_token = len(state.tokens)
+        label_end = state.md.helpers.parseLinkLabel(state, start + label_offset, disable_nested) if state.src[start:start + label_offset + 1].endswith("[") else -1
+        ok = rule(state, silent)
+        spans = getattr(_recorder, "spans", None)
+        if not ok or silent or spans is None or label_end < 0 or len(state.tokens) <= first_token:
+            return ok
+        end = state.pos
+        tail = state.src[label_end + 1:end]
+        if tail.startswith("(") and tail.endswith(")"):
+            return ok  # an inline link already
+        # Pending plain text is flushed first, so the link is not always the first new token.
+        token = next((t for t in state.tokens[first_token:] if t.type in ("link_open", "image")), None)
+        url = token.attrGet(url_attr) if token else None
+        if url is not None:
+            spans.append((start, label_end + 1, end, str(url), str(token.attrGet("title") or "")))
+        return ok
+
+    return wrapped
+
+
+_MD.inline.ruler.at("link", _recording(rules_inline.link, 0, True, "href"))
+_MD.inline.ruler.at("image", _recording(rules_inline.image, 1, False, "src"))
+
+
+def _inline_destination(url: str, title: str) -> str:
+    if not title:
+        return f"(<{url}>)"
+    escaped = title.replace("\\", "\\\\").replace('"', '\\"')
+    return f'(<{url}> "{escaped}")'
+
+
+def _content_line_starts(lines: List[str], first: int, content: str) -> List[int | None]:
+    """Where each line of an inline token's content starts in the text, or None if it cannot be placed."""
+    starts: List[int | None] = []
+    offset = sum(len(line) + 1 for line in lines[:first])
+    for index, content_line in enumerate(content.split("\n")):
+        number = first + index
+        if number >= len(lines):
+            starts.append(None)
             continue
-        for line in segment.text.splitlines():
-            match = _DEFINITION_RE.match(line)
-            if match:
-                title = f" {match.group('title')}" if match.group("title") else ""
-                targets.setdefault(normalizeReference(match.group("label")), f"{match.group('url')}{title}")
-    for label, reference in references.items():
-        if label not in targets:
-            title = reference.get("title") or ""
-            title = ' "{}"'.format(title.replace("\\", "\\\\").replace('"', '\\"')) if title else ""
-            targets[label] = f"<{reference['href']}>{title}"
-    return targets
+        line = lines[number]
+        if line.rstrip().endswith(content_line):
+            column = len(line.rstrip()) - len(content_line)
+        elif line.count(content_line) == 1:
+            column = line.index(content_line)
+        else:
+            column = None
+        starts.append(None if column is None else offset + column)
+        offset += len(line) + 1
+    return starts
 
 
-def _inline_reference_links(segments: List[Segment], references: Dict[str, dict]) -> List[Segment]:
-    """Rewrite reference links as inline links: `[the docs][site]` -> `[the docs](https://...)`.
-
-    A reference link only works with its definition, which lives in another
-    block, and its label is easy for a model to translate. As an inline link
-    each block carries its own URL and renders on its own. Code spans are left
-    alone.
-    """
-    targets = _link_targets(segments, references)
-    if not targets:
-        return segments
-
-    def inline(match: re.Match) -> str:
-        label = match.group("label")
-        target = targets.get(normalizeReference(label if label else match.group("text")))
-        return f"[{match.group('text')}]({target})" if target else match.group(0)
-
-    def rewrite(text: str) -> str:
-        parts, last = [], 0
-        for kept in _KEEP_RE.finditer(text):
-            parts.append(_REFERENCE_LINK_RE.sub(inline, text[last:kept.start()]))
-            parts.append(kept.group(0))
-            last = kept.end()
-        parts.append(_REFERENCE_LINK_RE.sub(inline, text[last:]))
-        return "".join(parts)
-
-    for segment in segments:
-        if segment.translatable:
-            segment.text = rewrite(segment.text)
-    return segments
+def inline_reference_links(text: str) -> str:
+    env: dict = {}
+    tokens = _MD.parse(text, env)
+    if not env.get("references"):
+        return text
+    lines = text.split("\n")
+    edits = []
+    for token in tokens:
+        if token.type != "inline" or token.map is None:
+            continue
+        _recorder.spans = []
+        try:
+            _MD.inline.parse(token.content, _MD, env, [])
+            spans = _recorder.spans
+        finally:
+            _recorder.spans = None
+        if not spans:
+            continue
+        line_starts = _content_line_starts(lines, token.map[0], token.content)
+        content_offsets = []
+        offset = 0
+        for content_line in token.content.split("\n"):
+            content_offsets.append(offset)
+            offset += len(content_line) + 1
+        for link_start, start, end, url, title in spans:
+            # Inside a bare URL the display (GFM autolinks) shows one link; leave it.
+            word = re.split(r"\s", token.content[:link_start])[-1]
+            if _BARE_URL_RE.match(word):
+                continue
+            index = max(i for i, value in enumerate(content_offsets) if value <= start)
+            if line_starts[index] is None or "\n" in token.content[start:end]:
+                continue
+            at = line_starts[index] + start - content_offsets[index]
+            if text[at:at + end - start] != token.content[start:end]:
+                continue
+            edits.append((at, at + end - start, _inline_destination(url, title)))
+    for start, end, replacement in sorted(edits, reverse=True):
+        text = text[:start] + replacement + text[end:]
+    return text

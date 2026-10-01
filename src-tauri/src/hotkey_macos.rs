@@ -146,12 +146,23 @@ impl MacHotkeyListener {
     }
 
     pub fn stop(mut self) {
+        self.signal_stop();
+        if let Some(join_handle) = self.join_handle.take() {
+            let _ = join_handle.join();
+        }
+    }
+
+    // Quitting: signal the thread but do not wait for it. It may be handling
+    // a trigger that waits on the main thread, which is the one quitting.
+    pub fn stop_without_waiting(mut self) {
+        self.signal_stop();
+        self.join_handle.take();
+    }
+
+    fn signal_stop(&self) {
         self.stop_flag.store(true, Ordering::Release);
         if let Some(run_loop) = self.run_loop.lock().unwrap().clone() {
             run_loop.stop();
-        }
-        if let Some(join_handle) = self.join_handle.take() {
-            let _ = join_handle.join();
         }
     }
 }

@@ -184,6 +184,19 @@ def _ends_cjk(text: str) -> bool:
     return bool(text) and unicodedata.east_asian_width(text[-1]) in "WF"
 
 
+def _keep_leading_indent(source: str, target: str) -> str:
+    """Give a Markdown block back the indentation its first line had.
+
+    A list split around its code leaves pieces that start indented (a
+    continuation paragraph, a sub-item); without the indent they would leave
+    the list when the blocks are put back together.
+    """
+    indent = source[: len(source) - len(source.lstrip(" "))]
+    if not indent or not target or target.startswith(indent):
+        return target
+    return indent + target.lstrip(" ")
+
+
 def split_output(content: str, markdown: bool) -> List[str]:
     """Split a chunk translation back into paragraphs.
 
@@ -227,7 +240,8 @@ def iter_translation(
             yield content
 
     def clean(raw: str, index: int) -> str:
-        return extract_translation(raw, segments[index].text, keep_format=opt.markdown)
+        target = extract_translation(raw, segments[index].text, keep_format=opt.markdown)
+        return _keep_leading_indent(segments[index].text, target) if opt.markdown else target
 
     for chunk in plan_chunks(segments, opt):
         sources = [segments[index].text for index in chunk]

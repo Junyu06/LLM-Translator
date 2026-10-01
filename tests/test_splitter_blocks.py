@@ -79,14 +79,14 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         )
         self.assertEqual(
             segments[0].text,
-            'See [the docs](https://example.com/docs "Docs"), [Site](https://example.com/docs "Docs") '
-            'and [site](https://example.com/docs "Docs"), plus ![logo](<https://example.com/logo.png>).',
+            'See [the docs](<https://example.com/docs> "Docs"), [Site](<https://example.com/docs> "Docs") '
+            'and [site](<https://example.com/docs> "Docs"), plus ![logo](<https://example.com/logo.png>).',
         )
         self.assertEqual((segments[1].kind, segments[1].protected), ("link_definitions", True))
 
     def test_inline_code_and_inline_links_are_left_alone(self):
         segments = split_markdown_blocks("Use `[site]` or [x](https://a.b) and [site].\n\n[site]: https://example.com")
-        self.assertEqual(segments[0].text, "Use `[site]` or [x](https://a.b) and [site](https://example.com).")
+        self.assertEqual(segments[0].text, "Use `[site]` or [x](https://a.b) and [site](<https://example.com>).")
 
     def test_multi_line_definition_is_protected(self):
         segments = split_markdown_blocks("Text.\n\n[site]:\n  https://example.com\n  \"Title\"")
@@ -108,9 +108,9 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         segments = split_markdown_blocks("Press [Enter] to continue.")
         self.assertEqual(segments[0].text, "Press [Enter] to continue.")
 
-    def test_angle_bracket_destination_is_kept_intact(self):
+    def test_angle_bracket_destination_stays_one_destination(self):
         segments = split_markdown_blocks("See [spec].\n\n[spec]: <https://example.com/a b)c>")
-        self.assertEqual(segments[0].text, "See [spec](<https://example.com/a b)c>).")
+        self.assertEqual(segments[0].text, "See [spec](<https://example.com/a%20b)c>).")
 
     def test_list_item_opening_with_a_code_fence_is_protected(self):
         text = "- ```python\n  keep()\n  ```\n- Translate this item."
@@ -182,7 +182,27 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
 
     def test_link_text_with_brackets_is_rewritten(self):
         segments = split_markdown_blocks("See [the **[docs]**][site].\n\n[site]: https://example.com")
-        self.assertEqual(segments[0].text, "See [the **[docs]**](https://example.com).")
+        self.assertEqual(segments[0].text, "See [the **[docs]**](<https://example.com>).")
+
+    def test_codex_round_eleven_link_cases(self):
+        defs = "\n\n[site]: https://target.example\n[docs]: https://docs.example"
+        cases = {
+            "[search](https://example.com/(v1)/[site])": "[search](https://example.com/(v1)/[site])",
+            "[https://example.com][site]": "[https://example.com](<https://target.example>)",
+            # docs is defined, so CommonMark makes the inner [docs] the link, not the outer one.
+            "[the [API [docs]]][site]": "[the [API [docs](<https://docs.example>)]][site](<https://target.example>)",
+            "[![CI][docs]][site]": "[![CI](<https://docs.example>)](<https://target.example>)",
+        }
+        for source, expected in cases.items():
+            self.assertEqual(split_markdown_blocks(source + defs)[0].text, expected, source)
+        only_site = split_markdown_blocks("[the [API [docs]]][site]\n\n[site]: https://target.example")
+        self.assertEqual(only_site[0].text, "[the [API [docs]]](<https://target.example>)")
+
+    def test_reference_inside_a_list_and_a_quote(self):
+        text = "- See [the docs][site]\n  and [site].\n\n> Quote [site].\n\n[site]: https://e.example"
+        segments = split_markdown_blocks(text)
+        self.assertEqual(segments[0].text, "- See [the docs](<https://e.example>)\n  and [site](<https://e.example>).")
+        self.assertEqual(segments[1].text, "> Quote [site](<https://e.example>).")
 
     def test_setext_heading_is_one_block(self):
         self.assertEqual(kinds("Title\n=====\n\nText."), [("heading", False), ("text", False)])

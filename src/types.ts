@@ -56,6 +56,8 @@ export type TranslationRequest = {
   // Re-translating one paragraph: the paragraphs before it, and some randomness.
   context?: Array<{ source: string; target: string }>;
   temperature?: number;
+  // The text is one block already split out: translate it without splitting again.
+  as_block?: boolean;
 };
 
 export type TranslationResponse = {

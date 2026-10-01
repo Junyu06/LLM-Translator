@@ -107,6 +107,8 @@ class TranslationRequest:
     # and the paragraphs before it (source and translation) as context.
     temperature: float = 0.0
     context: list[dict[str, str]] = field(default_factory=list)
+    # The text is one block the splitter already produced: translate it as is.
+    as_block: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.text, str):
@@ -129,6 +131,7 @@ class TranslationRequest:
         _require_str("custom_prompt", self.custom_prompt)
         if self.prompt_style == "custom" and not self.custom_prompt.strip():
             raise ValueError("The custom prompt is empty. Write one in Settings or pick another prompt.")
+        _require_bool("as_block", self.as_block)
         if isinstance(self.temperature, bool) or not isinstance(self.temperature, (int, float)) or not 0 <= self.temperature <= 2:
             raise ValueError("Invalid temperature: expected a number from 0 to 2.")
         if not isinstance(self.context, list) or not all(

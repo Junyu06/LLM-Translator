@@ -159,6 +159,29 @@ class TranslationServiceTests(unittest.TestCase):
         self.assertEqual(calls[0][1]["content"], "第一。")
         self.assertEqual(backend_cls.call_args[0][0].options, {"temperature": 0.3})
 
+    @patch("python_backend.services.translation_service.OllamaBackend")
+    def test_a_block_is_translated_as_is_and_keeps_its_indent(self, backend_cls):
+        events, calls = self.run_service(
+            backend_cls,
+            TranslationRequest(text="     Then restart the app.", model="m", translation_mode="markdown", as_block=True),
+            "然后重启应用。",
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(events[-1]["output_text"], "     然后重启应用。")
+
+    @patch("python_backend.services.translation_service.OllamaBackend")
+    def test_list_piece_after_code_keeps_its_indent(self, backend_cls):
+        text = "1. Install:\n   ```bash\n   npm i\n   ```\n   Then restart.\n   - Child\n2. Open."
+        events, _ = self.run_service(
+            backend_cls,
+            TranslationRequest(text=text, model="m", translation_mode="markdown"),
+            "1. 安装：",
+            "然后重启。\n   - 子项\n2. 打开。",
+        )
+        self.assertEqual(events[-1]["event"], "completed")
+        targets = [segment["target"] for segment in events[-1]["segments"]]
+        self.assertEqual(targets[-1], "   然后重启。\n   - 子项\n2. 打开。")
+
     def test_rejects_empty_input(self):
         with self.assertRaises(ValueError):
             list(TranslationService().stream_translate(TranslationRequest(text="   ")))
