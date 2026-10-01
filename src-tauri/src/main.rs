@@ -215,7 +215,10 @@ fn default_config() -> Value {
         "hotkey_enabled": true,
         "minimize_to_tray": true,
         "theme": "system",
-        "ui_lang": "en"
+        "ui_lang": "en",
+        "glossary": "",
+        "prompt_style": "auto",
+        "custom_prompt": ""
     })
 }
 
@@ -1092,13 +1095,13 @@ fn hotkey_status(state: State<AppState>) -> HotkeyStatus {
     state.hotkey_status.lock().unwrap().clone()
 }
 
-#[tauri::command]
-fn translate(app: AppHandle, payload: String) -> Result<String, String> {
-    run_bridge(&app, "translate", Some(&payload))
-}
-
 // Bridge calls that can wait on the network or OCR run on a blocking thread:
 // synchronous Tauri commands run on the main thread and would freeze the window.
+#[tauri::command]
+async fn translate(app: AppHandle, payload: String) -> Result<String, String> {
+    run_bridge_off_main(app, "translate", Some(payload)).await
+}
+
 async fn run_bridge_off_main(app: AppHandle, command: &'static str, input: Option<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || run_bridge(&app, command, input.as_deref()))
         .await

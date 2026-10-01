@@ -56,7 +56,10 @@ const defaultConfig: AppConfig = {
   hotkey_enabled: true,
   minimize_to_tray: true,
   theme: "system",
-  ui_lang: "en"
+  ui_lang: "en",
+  glossary: "",
+  prompt_style: "auto",
+  custom_prompt: ""
 };
 
 type Status = { text: string; tone: "idle" | "busy" | "error" };
@@ -83,6 +86,9 @@ export default function App() {
   const [scrollLocked, setScrollLocked] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>(() => loadHistory());
   const [models, setModels] = useState<ModelList>({ models: [], error: null, loading: false });
+  const [retranslating, setRetranslating] = useState<Set<number>>(new Set());
+  // Changes whenever the text being shown changes, so per-paragraph view state starts fresh.
+  const [viewVersion, setViewVersion] = useState(0);
 
   // Each translation gets a run id. Anything that resolves after a newer run
   // started, or after Stop/Clear, checks the id and drops its result.
@@ -96,8 +102,12 @@ export default function App() {
   const permissionPollRef = useRef<number | null>(null);
   const captureRef = useRef<() => Promise<void>>(async () => {});
   const navRef = useRef<HTMLElement>(null);
+  const segmentsRef = useRef<TranslationSegment[]>([]);
+  // The text the shown translation belongs to (the box may have been edited since).
+  const shownSourceRef = useRef("");
 
   configRef.current = config;
+  segmentsRef.current = segments;
   const t = translator(config.ui_lang);
   const lang = (code: string) => languageName(config.ui_lang, code);
 
@@ -179,6 +189,28 @@ export default function App() {
     }
   };
 
+  const requestFor = (text: string, current: AppConfig): TranslationRequest => ({
+    text,
+    source_lang: current.source_lang,
+    target_lang: current.target_lang,
+    collapse_newlines: current.collapse_newlines,
+    // Side-by-side is drawn from segments, so switching views never needs a new request.
+    output_mode: "translations_only",
+    translation_mode: current.translation_mode,
+    mode: current.mode,
+    host: current.host,
+    model: current.model,
+    glossary: current.glossary,
+    prompt_style: current.prompt_style,
+    custom_prompt: current.custom_prompt
+  });
+
+  // Anything that replaces the shown text drops per-paragraph state and late re-translations.
+  const resetView = () => {
+    setRetranslating(new Set());
+    setViewVersion((version) => version + 1);
+  };
+
   const runTranslation = async (text: string) => {
     if (!text.trim()) return;
     // A new request replaces whatever is still running.
@@ -187,26 +219,17 @@ export default function App() {
     stopCurrentJob();
 
     const current = configRef.current;
+    shownSourceRef.current = text;
     setInput(text);
     setSegments([]);
     setOutput("");
     setDetectedLang(null);
     setProgress({ completed: 0, total: 0 });
     setRunning(true);
+    resetView();
     showStatus(t("translating"), "busy");
 
-    const request: TranslationRequest = {
-      text,
-      source_lang: current.source_lang,
-      target_lang: current.target_lang,
-      collapse_newlines: current.collapse_newlines,
-      // Side-by-side is drawn from segments, so switching views never needs a new request.
-      output_mode: "translations_only",
-      translation_mode: current.translation_mode,
-      mode: current.mode,
-      host: current.host,
-      model: current.model
-    };
+    const request = requestFor(text, current);
 
     if (isTauriRuntime()) {
       let jobId: number;
@@ -244,6 +267,53 @@ export default function App() {
     }
   };
 
+  // One paragraph, translated again on its own with the paragraphs before it as
+  // context and a little randomness, so the retry can come out differently.
+  const retranslateSegment = async (index: number) => {
+    const runId = runIdRef.current;
+    const all = segmentsRef.current;
+    const segment = all[index];
+    if (!segment || retranslating.has(index)) return;
+    const context = all
+      .slice(0, index)
+      .filter((pair) => pair.source.trim() && pair.done && pair.target.trim() && pair.target !== pair.source)
+      .slice(-3)
+      .map(({ source, target }) => ({ source, target }));
+    const settle = () =>
+      setRetranslating((prev) => {
+        const next = new Set(prev);
+        next.delete(index);
+        return next;
+      });
+    setRetranslating((prev) => new Set(prev).add(index));
+    try {
+      const response = await translate({ ...requestFor(segment.source, configRef.current), context, temperature: 0.3 });
+      if (runIdRef.current !== runId) return;
+      const target = response.output_text.trim();
+      const next = segmentsRef.current.map((pair, i) => (i === index ? { ...pair, target, done: true } : pair));
+      const joined = next.map((pair) => pair.target).join(configRef.current.translation_mode === "markdown" ? "\n\n" : "\n");
+      segmentsRef.current = next;
+      setSegments(next);
+      setOutput(joined);
+      setHistory((prev) => addHistoryItem(prev, shownSourceRef.current, joined, next));
+    } catch (error) {
+      if (runIdRef.current === runId) showStatus(describeFailure(undefined, errorText(error)), "error");
+    } finally {
+      if (runIdRef.current === runId) settle();
+    }
+  };
+
+  const copySegment = async (index: number) => {
+    const segment = segmentsRef.current[index];
+    if (!segment) return;
+    try {
+      await writeClipboardText(segment.target);
+      showStatus(t("copied"), "idle", 2000);
+    } catch (error) {
+      showStatus(errorText(error), "error");
+    }
+  };
+
   const stopTranslation = () => {
     runIdRef.current += 1;
     stopCurrentJob();
@@ -259,6 +329,7 @@ export default function App() {
     setSegments([]);
     setOutput("");
     setDetectedLang(null);
+    resetView();
     showStatus("");
   };
 
@@ -266,10 +337,12 @@ export default function App() {
     runIdRef.current += 1;
     stopCurrentJob();
     setRunning(false);
+    shownSourceRef.current = item.source;
     setInput(item.source);
     setSegments(item.segments ?? []);
     setOutput(item.target);
     setDetectedLang(null);
+    resetView();
     showStatus("");
   };
 
@@ -353,6 +426,7 @@ export default function App() {
       setInput(output);
       setSegments([]);
       setOutput("");
+      resetView();
     }
   };
 
@@ -506,10 +580,7 @@ export default function App() {
   return (
     <div className="app-container" style={{ fontSize: `${config.font_size}px` }}>
       <nav className="app-nav" ref={navRef}>
-        <div className="segmented-control" role="group">
-          <button className={`segment-btn ${!markdown ? "active" : ""}`} onClick={() => updateConfig({ translation_mode: "normal" })}>{t("mode_normal")}</button>
-          <button className={`segment-btn ${markdown ? "active" : ""}`} onClick={() => updateConfig({ translation_mode: "markdown" })} title={t("mode_markdown_desc")}>{t("mode_markdown")}</button>
-        </div>
+        <div className="nav-brand">Translator</div>
 
         <div className="lang-switcher">
           <select className="lang-select" value={config.source_lang} onChange={(e) => updateConfig({ source_lang: e.target.value })}>
@@ -536,6 +607,10 @@ export default function App() {
           <div className="panel-header">
             <span className="panel-label">{sourceLabel}</span>
             <div className="row-actions">
+              <div className="segmented-control compact" role="group">
+                <button className={`segment-btn ${!markdown ? "active" : ""}`} onClick={() => updateConfig({ translation_mode: "normal" })}>{t("mode_normal")}</button>
+                <button className={`segment-btn ${markdown ? "active" : ""}`} onClick={() => updateConfig({ translation_mode: "markdown" })} title={t("mode_markdown_desc")}>{t("mode_markdown")}</button>
+              </div>
               {fullscreenPanel === "input"
                 ? iconButton("exit_fullscreen", () => setFullscreenPanel(null), <IconCollapse />)
                 : iconButton("fullscreen", () => setFullscreenPanel("input"), <IconExpand />)}
@@ -587,11 +662,16 @@ export default function App() {
           </div>
           <div ref={outputScrollRef} className="output-content" onScroll={(e) => syncScroll(e.currentTarget, inputScrollRef.current)}>
             <TranslationView
+              key={viewVersion}
+              t={t}
               segments={segments}
               outputText={output}
               bilingual={bilingual}
               markdown={markdown}
               running={running}
+              retranslating={retranslating}
+              onCopy={(index) => void copySegment(index)}
+              onRetranslate={(index) => void retranslateSegment(index)}
               emptyHint={t("output_empty", { shortcut: DOUBLE_COPY_SHORTCUT })}
             />
           </div>

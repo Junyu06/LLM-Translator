@@ -23,7 +23,12 @@ export type AppConfig = {
   minimize_to_tray: boolean;
   theme: "light" | "dark" | "system";
   ui_lang: "en" | "zh";
+  glossary: string;
+  prompt_style: PromptStyle;
+  custom_prompt: string;
 };
+
+export type PromptStyle = "auto" | "index" | "hy" | "generic" | "custom";
 
 export type TranslationRequest = {
   text: string;
@@ -35,6 +40,12 @@ export type TranslationRequest = {
   mode: "local" | "http";
   host: string;
   model: string;
+  glossary: string;
+  prompt_style: PromptStyle;
+  custom_prompt: string;
+  // Re-translating one paragraph: the paragraphs before it, and some randomness.
+  context?: Array<{ source: string; target: string }>;
+  temperature?: number;
 };
 
 export type TranslationResponse = {

@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { StringKey } from "../i18n";
-import type { AppConfig } from "../types";
+import type { AppConfig, PromptStyle } from "../types";
 import { IconX } from "../icons";
 
 type T = (key: StringKey, values?: Record<string, string | number>) => string;
@@ -28,6 +28,31 @@ const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: (val
     <span className="slider" />
   </label>
 );
+
+// Same rule as core/prompt.py detect_family.
+const familyOf = (model: string) => {
+  const name = model.trim().toLowerCase().replace(/_/g, "-");
+  if (name.includes("index-translate") || name.includes("indexteam")) return "Index-Translate";
+  if (name.includes("hy-mt") || name.includes("hymt") || name.includes("hunyuan-mt")) return "Hy-MT";
+  return null;
+};
+
+// A text box that saves when it loses focus, not on every keystroke.
+function DraftArea({ value, onCommit, placeholder, rows }: { value: string; onCommit: (value: string) => void; placeholder?: string; rows: number }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  return (
+    <textarea
+      className="settings-textarea"
+      value={draft}
+      rows={rows}
+      placeholder={placeholder}
+      spellCheck={false}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => { if (draft !== value) onCommit(draft); }}
+    />
+  );
+}
 
 function Segmented<V extends string>({ value, options, onChange }: { value: V; options: Array<[V, string]>; onChange: (value: V) => void }) {
   return (
@@ -100,18 +125,69 @@ export default function SettingsSheet(props: Props) {
                 {modelNote && <div className={`settings-desc ${models.error || !models.models.includes(config.model) ? "warn" : ""}`}>{modelNote}</div>}
               </div>
               <div className="row-actions">
-                <input
-                  className="settings-input"
-                  list="ollama-models"
-                  value={config.model}
-                  spellCheck={false}
-                  onChange={(e) => update({ model: e.target.value })}
-                />
-                <datalist id="ollama-models">
-                  {models.models.map((name) => <option key={name} value={name} />)}
-                </datalist>
+                {models.models.length > 0 ? (
+                  <select className="settings-input settings-select" value={config.model} onChange={(e) => update({ model: e.target.value })}>
+                    {!models.models.includes(config.model) && <option value={config.model}>{config.model}</option>}
+                    {models.models.map((name) => <option key={name} value={name}>{name}</option>)}
+                  </select>
+                ) : (
+                  <input
+                    className="settings-input"
+                    value={config.model}
+                    spellCheck={false}
+                    onChange={(e) => update({ model: e.target.value })}
+                  />
+                )}
                 <button className="secondary-btn-sm" onClick={props.refreshModels} disabled={models.loading}>{t("refresh_models")}</button>
               </div>
+            </div>
+          </section>
+
+
+          <section className="settings-section">
+            <div className="section-label">{t("settings_prompt")}</div>
+            <div className="settings-row">
+              <div className="settings-info">
+                <div className="settings-name">{t("prompt")}</div>
+                <div className="settings-desc">
+                  {config.prompt_style === "auto"
+                    ? t("prompt_desc_auto", { family: familyOf(config.model) ?? t("prompt_generic") })
+                    : config.prompt_style === "custom" ? t("prompt_desc_custom") : t("prompt_desc_fixed")}
+                </div>
+              </div>
+              <select className="settings-input settings-select narrow" value={config.prompt_style} onChange={(e) => update({ prompt_style: e.target.value as PromptStyle })}>
+                <option value="auto">{t("prompt_auto")}</option>
+                <option value="index">Index-Translate</option>
+                <option value="hy">Hy-MT</option>
+                <option value="generic">{t("prompt_generic")}</option>
+                <option value="custom">{t("prompt_custom")}</option>
+              </select>
+            </div>
+            {config.prompt_style === "custom" && (
+              <div className="settings-stack">
+                <div className="settings-info">
+                  <div className="settings-name">{t("custom_prompt")}</div>
+                  <div className="settings-desc">{t("custom_prompt_desc")}</div>
+                </div>
+                <DraftArea
+                  value={config.custom_prompt}
+                  rows={4}
+                  placeholder={"Translate the following text into {target_lang}. Output only the translation.\n\n{text}"}
+                  onCommit={(custom_prompt) => update({ custom_prompt })}
+                />
+              </div>
+            )}
+            <div className="settings-stack">
+              <div className="settings-info">
+                <div className="settings-name">{t("glossary")}</div>
+                <div className="settings-desc">{t("glossary_desc")}</div>
+              </div>
+              <DraftArea
+                value={config.glossary}
+                rows={5}
+                placeholder={"medium setting = medium 思考档位\nhubctl = hubctl"}
+                onCommit={(glossary) => update({ glossary })}
+              />
             </div>
           </section>
 
