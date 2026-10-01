@@ -34,10 +34,10 @@ class PromptTests(unittest.TestCase):
 
 class GlossaryTests(unittest.TestCase):
     def test_parse_accepts_common_separators_and_skips_comments(self):
-        text = "# terms\nmedium setting = medium 思考档位\nhubctl => hubctl\nStrata → Strata\nfoo\tbar\nno separator\n = empty"
+        text = "# terms\ncontext window = 上下文窗口\nOllama => Ollama\nGGUF → GGUF\nfoo\tbar\nno separator\n = empty"
         self.assertEqual(
             parse_glossary(text),
-            [("medium setting", "medium 思考档位"), ("hubctl", "hubctl"), ("Strata", "Strata"), ("foo", "bar")],
+            [("context window", "上下文窗口"), ("Ollama", "Ollama"), ("GGUF", "GGUF"), ("foo", "bar")],
         )
 
     def test_only_terms_in_the_text_are_used_and_latin_matches_whole_words(self):
@@ -45,12 +45,12 @@ class GlossaryTests(unittest.TestCase):
         self.assertEqual(terms_in("The Medium setting of the catalog. 模型", glossary), [("medium", "中档"), ("模型", "model")])
 
     def test_index_uses_its_terminology_wording(self):
-        prompt = build_prompt("Strata's default medium setting.", family=ModelFamily.INDEX, target_lang="zh",
-                              glossary=[("medium setting", "medium 思考档位"), ("unused", "x")])
+        prompt = build_prompt("Raise the context window to 8K.", family=ModelFamily.INDEX, target_lang="zh",
+                              glossary=[("context window", "上下文窗口"), ("unused", "x")])
         self.assertEqual(
             prompt,
-            "请将以下文本翻译为中文。要求：术语使用固定译法（medium setting 固定译为“medium 思考档位”），"
-            "保留原文结构，直接输出翻译结果，不要进行任何解释：\n\nStrata's default medium setting.",
+            "请将以下文本翻译为中文。要求：术语使用固定译法（context window 固定译为“上下文窗口”），"
+            "保留原文结构，直接输出翻译结果，不要进行任何解释：\n\nRaise the context window to 8K.",
         )
 
     def test_hy_uses_its_reference_wording(self):

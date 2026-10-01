@@ -26,8 +26,8 @@
 ## Validation
 
 - Normal backend validation on macOS/Linux: `python3 -m unittest discover -s tests -v`.
-- Frontend validation: `/opt/homebrew/bin/npm run build:frontend` on the Mac mini, or `npm run build:frontend` when `npm` is on PATH.
-- Tauri validation: `~/.cargo/bin/cargo check --manifest-path src-tauri/Cargo.toml` on the Mac mini, or `cargo check --manifest-path src-tauri/Cargo.toml` when `cargo` is on PATH.
+- Frontend validation: `npm run build:frontend`.
+- Tauri validation: `cargo check --manifest-path src-tauri/Cargo.toml`.
 - Before calling a Windows package ready, run `npm run tauri:build:windows`.
 - Verify the bridge executable responds to `src-tauri/binaries/translator-bridge/translator-bridge.exe health` (macOS: `Translator.app/Contents/Resources/translator-bridge/translator-bridge health`).
 - Verify generated installer manifests include `translator-bridge` directory entries.

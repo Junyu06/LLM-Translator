@@ -60,7 +60,7 @@ class TranslationServiceTests(unittest.TestCase):
     def test_local_mode_ignores_the_saved_remote_host(self, backend_cls):
         self.run_service(
             backend_cls,
-            TranslationRequest(text="Hello.", model="m", mode="local", host="http://10.0.0.5:11434"),
+            TranslationRequest(text="Hello.", model="m", mode="local", host="http://192.0.2.10:11434"),
             "你好。",
         )
         self.assertEqual(backend_cls.call_args[0][0].host, "http://127.0.0.1:11434")

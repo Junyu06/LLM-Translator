@@ -185,7 +185,7 @@ export default function SettingsSheet(props: Props) {
               <DraftArea
                 value={config.glossary}
                 rows={5}
-                placeholder={"medium setting = medium 思考档位\nhubctl = hubctl"}
+                placeholder={"context window = 上下文窗口\nOllama = Ollama"}
                 onCommit={(glossary) => update({ glossary })}
               />
             </div>

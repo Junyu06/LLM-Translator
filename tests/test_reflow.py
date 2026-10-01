@@ -40,7 +40,7 @@ class ReflowTests(unittest.TestCase):
 
     def test_short_lines_next_to_long_paragraphs_are_not_joined(self):
         text = (
-            "Now I'll write the unit file, the startup script, and a switcher script between the two.\n\n"
+            "The release adds a setup script, a config template, and a guide for upgrading old installs.\n\n"
             "Created 3 files, ran a command\n+46\n-0"
         )
         self.assertEqual(texts(text)[2:], ["Created 3 files, ran a command", "+46", "-0"])

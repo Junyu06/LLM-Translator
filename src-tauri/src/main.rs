@@ -739,6 +739,7 @@ pub(crate) fn handle_double_copy(app: &AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn quick_frontend_ready(state: State<AppState>) {
+    startup_log("quick_frontend_ready", None);
     state.quick_ready.store(true, Ordering::Release);
 }
 
