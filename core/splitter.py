@@ -261,7 +261,7 @@ def _link_targets(segments: List[Segment], references: Dict[str, dict]) -> Dict[
     for label, reference in references.items():
         if label not in targets:
             title = reference.get("title") or ""
-            title = ' "{}"'.format(title.replace('"', '\\"')) if title else ""
+            title = ' "{}"'.format(title.replace("\\", "\\\\").replace('"', '\\"')) if title else ""
             targets[label] = f"<{reference['href']}>{title}"
     return targets
 

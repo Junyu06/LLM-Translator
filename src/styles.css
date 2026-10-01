@@ -264,4 +264,5 @@ input:checked + .slider:before { transform: translateX(18px); }
 .quick-body { flex: 1; overflow-y: auto; padding: 6px 18px 18px; overflow-wrap: anywhere; }
 .quick-body .translation { max-width: none; }
 .quick-message { margin: 4px 0 0; font-size: 0.9em; color: var(--fg-muted); }
+.quick-toast.error { background: var(--danger); color: #ffffff; max-width: calc(100% - 24px); }
 .quick-toast { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); background: var(--fg-main); color: var(--bg-app); font-size: 12px; font-weight: 600; padding: 5px 12px; border-radius: var(--radius-full); }

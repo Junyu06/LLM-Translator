@@ -18,6 +18,7 @@ request instead, which both families handle as a normal translation input.
 from __future__ import annotations
 
 import re
+import unicodedata
 from enum import Enum
 from typing import List, Sequence, Tuple
 
@@ -71,15 +72,25 @@ def parse_glossary(text: str) -> List[Term]:
     return terms
 
 
+def _is_wide(ch: str) -> bool:
+    return unicodedata.east_asian_width(ch) in "WF"
+
+
 def terms_in(text: str, glossary: Sequence[Term]) -> List[Term]:
-    """Glossary terms that occur in `text`. Latin terms match whole words, ignoring case."""
+    """Glossary terms that occur in `text`.
+
+    Chinese, Japanese and Korean terms match anywhere (there are no spaces
+    between words); other terms match whole words, ignoring case, so `café`
+    finds `CAFÉ` but not `decaféination`.
+    """
     found: List[Term] = []
     for source, target in glossary:
-        if source.isascii():
-            pattern = r"(?<![A-Za-z0-9])" + re.escape(source) + r"(?![A-Za-z0-9])"
-            if re.search(pattern, text, re.IGNORECASE):
-                found.append((source, target))
-        elif source in text:
+        if any(_is_wide(ch) for ch in source):
+            matched = source in text
+        else:
+            pattern = r"(?<!\w)" + re.escape(source) + r"(?!\w)"
+            matched = re.search(pattern, text, re.IGNORECASE) is not None
+        if matched:
             found.append((source, target))
     return found
 

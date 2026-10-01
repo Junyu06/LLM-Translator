@@ -85,6 +85,8 @@ export default function App() {
   const permissionPollRef = useRef<number | null>(null);
   const captureRef = useRef<() => Promise<void>>(async () => {});
   const showResultRef = useRef<(result: QuickResult) => void>(() => {});
+  const retranslateIdRef = useRef(0);
+  const retranslateOwnerRef = useRef(new Map<number, number>());
   const navRef = useRef<HTMLElement>(null);
   const segmentsRef = useRef<TranslationSegment[]>([]);
   // The text the shown translation belongs to (the box may have been edited since).
@@ -175,6 +177,7 @@ export default function App() {
 
   // Anything that replaces the shown text drops per-paragraph state and late re-translations.
   const resetView = () => {
+    retranslateOwnerRef.current.clear();
     setRetranslating(new Set());
     setViewVersion((version) => version + 1);
   };
@@ -247,12 +250,20 @@ export default function App() {
       .filter((pair) => pair.source.trim() && pair.done && pair.target.trim() && pair.target !== pair.source)
       .slice(-3)
       .map(({ source, target }) => ({ source, target }));
-    const settle = () =>
+    // Each paragraph remembers which request is its latest, so a request that
+    // outlived its run still clears its own waiting mark, and only its own.
+    const request = retranslateIdRef.current + 1;
+    retranslateIdRef.current = request;
+    retranslateOwnerRef.current.set(index, request);
+    const settle = () => {
+      if (retranslateOwnerRef.current.get(index) !== request) return;
+      retranslateOwnerRef.current.delete(index);
       setRetranslating((prev) => {
         const next = new Set(prev);
         next.delete(index);
         return next;
       });
+    };
     setRetranslating((prev) => new Set(prev).add(index));
     try {
       const response = await translate({ ...requestFor(segment.source, configRef.current), context, temperature: 0.3 });
@@ -267,7 +278,7 @@ export default function App() {
     } catch (error) {
       if (runIdRef.current === runId) showStatus(describeFailure(undefined, errorText(error)), "error");
     } finally {
-      if (runIdRef.current === runId) settle();
+      settle();
     }
   };
 

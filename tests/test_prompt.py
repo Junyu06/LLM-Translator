@@ -44,6 +44,11 @@ class GlossaryTests(unittest.TestCase):
         glossary = [("medium", "中档"), ("cat", "猫"), ("模型", "model")]
         self.assertEqual(terms_in("The Medium setting of the catalog. 模型", glossary), [("medium", "中档"), ("模型", "model")])
 
+    def test_accented_latin_terms_match_whole_words_ignoring_case(self):
+        glossary = [("café", "咖啡馆"), ("München", "慕尼黑")]
+        self.assertEqual(terms_in("CAFÉ in MÜNCHEN", glossary), glossary)
+        self.assertEqual(terms_in("decaféination", glossary), [])
+
     def test_index_uses_its_terminology_wording(self):
         prompt = build_prompt("Raise the context window to 8K.", family=ModelFamily.INDEX, target_lang="zh",
                               glossary=[("context window", "上下文窗口"), ("unused", "x")])

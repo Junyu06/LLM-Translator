@@ -167,6 +167,10 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         segments = split_markdown_blocks('See [the site][x].\n\n[x]:\n  https://example.com/a\n  "Home"')
         self.assertEqual(segments[0].text, 'See [the site](<https://example.com/a> "Home").')
 
+    def test_rewritten_title_keeps_quotes_and_backslashes_escaped(self):
+        segments = split_markdown_blocks('See [a][x].\n\n[x]:\n  https://example.com\n  "say \\"hi\\" \\\\"')
+        self.assertEqual(segments[0].text, 'See [a](<https://example.com> "say \\"hi\\" \\\\").')
+
     def test_setext_heading_is_one_block(self):
         self.assertEqual(kinds("Title\n=====\n\nText."), [("heading", False), ("text", False)])
 

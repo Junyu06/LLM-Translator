@@ -497,6 +497,14 @@ fn show_main_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn quit_app(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    state.quitting.store(true, Ordering::Relaxed);
+    stop_hotkey_listener(&state);
+    let _ = cancel_running_translation(app, &state, None, false);
+    app.exit(0);
+}
+
 fn should_minimize_to_tray(app: &AppHandle) -> bool {
     let _ = app;
     load_config_value()
@@ -1452,14 +1460,7 @@ fn main() {
             TRAY_TRANSLATE_CLIPBOARD_ID => {
                 let _ = emit_clipboard_translation_request(app);
             }
-            TRAY_QUIT_ID => {
-                app.state::<AppState>()
-                    .quitting
-                    .store(true, Ordering::Relaxed);
-                stop_hotkey_listener(&app.state::<AppState>());
-                let _ = cancel_running_translation(app, &app.state::<AppState>(), None, false);
-                app.exit(0);
-            }
+            TRAY_QUIT_ID => quit_app(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -1503,6 +1504,11 @@ fn main() {
                         let _ = app.set_dock_visibility(false);
                         let _ = app.hide();
                     }
+                } else {
+                    // The hidden quick window would otherwise keep the app
+                    // running with no main window to come back to.
+                    api.prevent_close();
+                    quit_app(window.app_handle());
                 }
             }
         })

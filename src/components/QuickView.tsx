@@ -167,6 +167,7 @@ export default function QuickView() {
         )}
       </div>
       {copied && <div className="quick-toast">{t("copied")}</div>}
+      {phase !== "error" && message && <div className="quick-toast error">{message}</div>}
     </div>
   );
 }
