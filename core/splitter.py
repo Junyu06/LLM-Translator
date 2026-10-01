@@ -6,7 +6,8 @@ are joined back first. Blank lines stay as passthrough units so the output
 keeps the original spacing.
 
 Markdown mode: one unit per Markdown block (heading, paragraph, list,
-blockquote, table). Only code is protected from translation.
+blockquote, table). Only code and reference link definitions are protected
+from translation.
 """
 
 from __future__ import annotations
@@ -106,6 +107,7 @@ def split_paragraphs(text: str) -> List[Segment]:
 _FENCE_RE = re.compile(r"^(?P<indent> {0,3})(?P<fence>`{3,}|~{3,})")
 _LIST_MARKER_RE = re.compile(r"^ {0,3}(?:[-+*]\s+\S|\d+[.)]\s+\S)")
 _HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:\s|$)")
+_LINK_DEFINITION_RE = re.compile(r"^ {0,3}\[[^\]]+\]:\s*\S")
 
 
 def _is_blank(line: str) -> bool:
@@ -126,6 +128,12 @@ def _is_list_continuation(line: str) -> bool:
 
 def _is_heading(line: str) -> bool:
     return _HEADING_RE.match(line) is not None
+
+
+def _is_any_fence(line: str) -> bool:
+    """A code fence at any indentation, including one nested in a list item."""
+    stripped = line.lstrip()
+    return stripped.startswith("```") or stripped.startswith("~~~")
 
 
 def _is_table_separator(line: str) -> bool:
@@ -236,6 +244,9 @@ def _take_list(lines: List[str], start: int) -> tuple[List[str], int]:
 
     while index < len(lines):
         line = lines[index]
+        # Code nested in a list item becomes its own protected block.
+        if _is_any_fence(line):
+            break
         if _is_list_marker(line) or (_is_list_continuation(line) and not _is_blank(line)):
             block.append(line)
             index += 1
@@ -314,6 +325,9 @@ def split_markdown_blocks(text: str) -> List[Segment]:
         else:
             block, index = _take_text(lines, index)
             kind = "text"
+            # Reference link definitions carry URLs, not prose.
+            if all(_LINK_DEFINITION_RE.match(item) for item in block):
+                protected, kind = True, "link_definitions"
 
         segments.append(Segment(text="\n".join(block), protected=protected, kind=kind))
 

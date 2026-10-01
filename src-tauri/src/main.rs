@@ -233,34 +233,50 @@ fn merge_object_config(base: &mut Value, patch: Value) {
 }
 
 fn load_config_value() -> Value {
-    let mut config = default_config();
-    let path = config_path();
-    let Ok(raw) = fs::read_to_string(&path) else {
-        return config;
-    };
-    match serde_json::from_str::<Value>(&raw) {
-        Ok(saved) if saved.is_object() => merge_object_config(&mut config, saved),
-        _ => back_up_corrupt_config(&path, &raw),
-    }
-    config
+    read_config().unwrap_or_else(|error| {
+        eprintln!("main: {error}");
+        default_config()
+    })
 }
 
-// Move an unreadable config aside (never overwriting an earlier backup) so the
-// next save starts from defaults instead of silently replacing the user's file.
-fn back_up_corrupt_config(path: &PathBuf, raw: &str) {
+// Defaults merged with the saved file. An unreadable file (bad UTF-8, bad JSON,
+// not an object) is moved aside first; if that fails this returns an error so
+// a save cannot overwrite the only copy.
+fn read_config() -> Result<Value, String> {
+    let mut config = default_config();
+    let path = config_path();
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(config),
+        Err(error) => return Err(format!("Failed to read config {}: {error}", path.display())),
+    };
+    let saved = std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .filter(Value::is_object);
+    match saved {
+        Some(saved) => merge_object_config(&mut config, saved),
+        None => back_up_corrupt_config(&path, &bytes)?,
+    }
+    Ok(config)
+}
+
+// Move an unreadable config aside, never overwriting an earlier backup.
+fn back_up_corrupt_config(path: &PathBuf, bytes: &[u8]) -> Result<(), String> {
     let mut backup = path.with_extension("json.corrupt");
     let mut index = 1;
     while backup.exists() {
         backup = path.with_extension(format!("json.corrupt.{index}"));
         index += 1;
     }
-    match fs::write(&backup, raw) {
-        Ok(()) => {
-            let _ = fs::remove_file(path);
-            eprintln!("main: config unreadable, moved to {}", backup.display());
-        }
-        Err(error) => eprintln!("main: config unreadable and backup failed: {error}"),
-    }
+    fs::write(&backup, bytes).map_err(|error| {
+        format!("Config {} is unreadable and could not be backed up: {error}", path.display())
+    })?;
+    fs::remove_file(path).map_err(|error| {
+        format!("Config {} was backed up but could not be moved aside: {error}", path.display())
+    })?;
+    eprintln!("main: config unreadable, moved to {}", backup.display());
+    Ok(())
 }
 
 fn save_config_value(patch: &str) -> Result<String, String> {
@@ -274,7 +290,7 @@ fn save_config_value(patch: &str) -> Result<String, String> {
         return Err("Config payload must be a JSON object.".to_string());
     }
 
-    let mut config = load_config_value();
+    let mut config = read_config()?;
     merge_object_config(&mut config, patch);
 
     let path = config_path();
@@ -485,49 +501,6 @@ fn hotkey_enabled(app: &AppHandle) -> bool {
         .unwrap_or(true)
 }
 
-fn read_clipboard_text_impl() -> Result<String, String> {
-    if cfg!(target_os = "macos") {
-        let output = Command::new(python_executable()?)
-            .args([
-                "-c",
-                "import pyperclip, sys; sys.stdout.write(pyperclip.paste() or '')",
-            ])
-            .output()
-            .map_err(|error| format!("Failed to read clipboard via pyperclip: {error}"))?;
-        if output.status.success() {
-            return String::from_utf8(output.stdout)
-                .map_err(|error| format!("Clipboard text was not valid UTF-8: {error}"));
-        }
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            "pyperclip clipboard read exited unsuccessfully".to_string()
-        } else {
-            stderr
-        });
-    }
-
-    if cfg!(target_os = "windows") {
-        let mut process = Command::new("powershell");
-        hide_child_console(&mut process);
-        let output = process
-            .args(["-NoProfile", "-Command", "Get-Clipboard -Raw"])
-            .output()
-            .map_err(|error| format!("Failed to read clipboard via PowerShell: {error}"))?;
-        if output.status.success() {
-            return String::from_utf8(output.stdout)
-                .map_err(|error| format!("Clipboard text was not valid UTF-8: {error}"));
-        }
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            "PowerShell Get-Clipboard exited unsuccessfully".to_string()
-        } else {
-            stderr
-        });
-    }
-
-    Err("Clipboard text commands are implemented only for macOS and Windows.".to_string())
-}
-
 fn write_clipboard_text_impl(payload: &str) -> Result<(), String> {
     if cfg!(target_os = "macos") {
         let mut child = Command::new("/usr/bin/pbcopy")
@@ -605,8 +578,18 @@ pub(crate) fn emit_clipboard_translation_request(app: &AppHandle) -> Result<(), 
     let window = main_window(app)?;
 
     // Let the source app finish the second Cmd+C and update the clipboard before we steal focus.
+    // The frontend then reads the clipboard itself, so text and images go through
+    // the same read-clipboard decision as the clipboard button.
     std::thread::sleep(std::time::Duration::from_millis(140));
-    let clipboard_text = read_clipboard_text_impl().ok();
+    let script = r#"
+          try {
+            const ok = typeof window.__translatorTriggerClipboardTranslation === 'function';
+            console.log('[translator] hotkey eval attempt: bridge=', ok);
+            if (ok) window.__translatorTriggerClipboardTranslation();
+          } catch (e) {
+            console.log('[translator] hotkey eval error', e);
+          }
+        "#;
 
     // Hidden windows can still accept eval, so delay bringing the app forward until after the frontend
     // has started reading the clipboard.
@@ -624,36 +607,7 @@ pub(crate) fn emit_clipboard_translation_request(app: &AppHandle) -> Result<(), 
             std::thread::sleep(std::time::Duration::from_millis(delay_ms));
         }
 
-        let payload = clipboard_text
-            .as_ref()
-            .map(|text| serde_json::to_string(text))
-            .transpose()
-            .map_err(|error| format!("Failed to serialize clipboard text: {error}"))?;
-        let script = match payload {
-            Some(text) => format!(
-                r#"
-                  try {{
-                    const ok = typeof window.__translatorTriggerClipboardTranslation === 'function';
-                    console.log('[translator] hotkey eval attempt: bridge=', ok);
-                    if (ok) window.__translatorTriggerClipboardTranslation({text});
-                  }} catch (e) {{
-                    console.log('[translator] hotkey eval error', e);
-                  }}
-                "#
-            ),
-            None => r#"
-                  try {
-                    const ok = typeof window.__translatorTriggerClipboardTranslation === 'function';
-                    console.log('[translator] hotkey eval attempt: bridge=', ok);
-                    if (ok) window.__translatorTriggerClipboardTranslation();
-                  } catch (e) {
-                    console.log('[translator] hotkey eval error', e);
-                  }
-                "#
-            .to_string(),
-        };
-
-        match window.eval(&script) {
+        match window.eval(script) {
             Ok(()) => {
                 eprintln!("main: clipboard trigger eval sent (attempt={attempt})");
                 show_main_window(app)?;

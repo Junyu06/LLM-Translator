@@ -94,7 +94,7 @@ export default function App() {
   const syncingScrollRef = useRef<HTMLElement | null>(null);
   const statusTimerRef = useRef<number | null>(null);
   const permissionPollRef = useRef<number | null>(null);
-  const captureRef = useRef<(prefilledText?: string) => Promise<void>>(async () => {});
+  const captureRef = useRef<() => Promise<void>>(async () => {});
 
   configRef.current = config;
   const t = translator(config.ui_lang);
@@ -272,26 +272,33 @@ export default function App() {
     showStatus("");
   };
 
-  // Clipboard button, double-copy hotkey and tray menu all land here. Text is
-  // used as-is; an image comes back as OCR text.
-  captureRef.current = async (prefilledText?: string) => {
-    let text = prefilledText?.trim() ? prefilledText : "";
-    let source: "text" | "image" | "empty" = text ? "text" : "empty";
-    if (!text) {
-      showStatus(t("reading_clipboard"), "busy");
-      // Right after a double copy the source app may still be writing the clipboard.
-      for (let attempt = 0; attempt < 3 && source === "empty"; attempt += 1) {
-        if (attempt > 0) await sleep(80);
-        try {
-          const capture = await readClipboard();
-          source = capture.source;
-          text = capture.text;
-        } catch (error) {
-          showStatus(`${t("clipboard_error")}: ${errorText(error)}`, "error");
-          return;
-        }
+  // Clipboard button, double-copy hotkey, tray menu and pasting an image all
+  // land here. Text is used as-is; an image comes back as OCR text. Reading
+  // the clipboard (and OCR) counts as part of the run, so Stop, Clear, a
+  // history item or a newer capture drops a result that arrives late.
+  captureRef.current = async () => {
+    const runId = runIdRef.current + 1;
+    runIdRef.current = runId;
+    stopCurrentJob();
+    setRunning(false);
+    showStatus(t("reading_clipboard"), "busy");
+
+    let text = "";
+    let source: "text" | "image" | "empty" = "empty";
+    // Right after a double copy the source app may still be writing the clipboard.
+    for (let attempt = 0; attempt < 3 && source === "empty"; attempt += 1) {
+      if (attempt > 0) await sleep(80);
+      if (runIdRef.current !== runId) return;
+      try {
+        const capture = await readClipboard();
+        source = capture.source;
+        text = capture.text;
+      } catch (error) {
+        if (runIdRef.current === runId) showStatus(`${t("clipboard_error")}: ${errorText(error)}`, "error");
+        return;
       }
     }
+    if (runIdRef.current !== runId) return;
     if (!text.trim()) {
       showStatus(source === "image" ? t("ocr_no_text") : t("clipboard_empty"), "error", 4000);
       return;
@@ -372,10 +379,10 @@ export default function App() {
 
   // ---------- startup ----------
 
-  // Rust calls window.__translatorTriggerClipboardTranslation(text) for the hotkey and tray menu.
+  // Rust calls window.__translatorTriggerClipboardTranslation() for the hotkey and tray menu.
   useEffect(() => {
-    (globalThis as any).__translatorTriggerClipboardTranslation = (text?: string) => {
-      void captureRef.current(text);
+    (globalThis as any).__translatorTriggerClipboardTranslation = () => {
+      void captureRef.current();
     };
     return () => {
       delete (globalThis as any).__translatorTriggerClipboardTranslation;

@@ -57,6 +57,17 @@ class MarkdownBlockSplitterTests(unittest.TestCase):
         self.assertEqual(kinds("    indented = True\n\nText"), [("indented_code", True), ("text", False)])
         self.assertEqual(segments[0].text, "    indented = True")
 
+    def test_code_fence_inside_a_list_item_stays_protected(self):
+        text = "1. Install:\n   ```bash\n   npm run build\n   ```\n2. Open the app."
+        segments = split_markdown_blocks(text)
+        self.assertEqual([(s.kind, s.protected) for s in segments], [("list", False), ("fenced_code", True), ("list", False)])
+        self.assertNotIn("npm", segments[0].text)
+        self.assertEqual(segments[1].text, "   ```bash\n   npm run build\n   ```")
+
+    def test_reference_link_definitions_are_not_translated(self):
+        segments = split_markdown_blocks("Read [the docs][site].\n\n[site]: https://example.com/docs")
+        self.assertEqual([(s.kind, s.protected) for s in segments], [("text", False), ("link_definitions", True)])
+
 
 if __name__ == "__main__":
     unittest.main()

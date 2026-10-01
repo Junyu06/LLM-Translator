@@ -38,3 +38,7 @@
 - Set `TRANSLATOR_STARTUP_LOG=1` and optionally `TRANSLATOR_STARTUP_LOG_FILE=<path>` to inspect bridge startup stages.
 - Corrupt config files are backed up with no-clobber `.corrupt` suffixes and then defaults are loaded.
 - The Windows NSIS hook waits for `translator-bridge.exe` to exit with a bounded loop; this hook was statically updated on macOS and still needs Windows installer verification before release.
+
+## Local Notes
+
+- If `AGENTS.local.md` exists in the repository root, read it after this file.
