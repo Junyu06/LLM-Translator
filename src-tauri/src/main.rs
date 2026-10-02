@@ -21,6 +21,8 @@ use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 mod hotkey_macos;
 #[cfg(target_os = "windows")]
 mod hotkey_windows;
+#[cfg(target_os = "macos")]
+mod panel_macos;
 
 const TRAY_OPEN_ID: &str = "tray_open";
 const TRAY_TRANSLATE_CLIPBOARD_ID: &str = "tray_translate_clipboard";
@@ -59,6 +61,8 @@ struct AppState {
     pending_clipboard_triggers: AtomicU64,
     // The quick window's page has loaded and registered its trigger.
     quick_ready: AtomicBool,
+    // macOS: the quick window is a non-activating panel (see panel_macos).
+    quick_is_panel: AtomicBool,
     // Process ids of one-shot bridge commands still running (translate,
     // read-clipboard, …), so quitting does not leave them behind.
     bridge_pids: Mutex<HashSet<u32>>,
@@ -737,10 +741,16 @@ fn create_quick_window(app: &AppHandle) -> Result<(), String> {
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(false);
-    builder
+    let _window = builder
         .build()
-        .map(|_| ())
-        .map_err(|error| format!("Failed to create quick window: {error}"))
+        .map_err(|error| format!("Failed to create quick window: {error}"))?;
+    #[cfg(target_os = "macos")]
+    {
+        let panel = panel_macos::make_panel(&_window);
+        app.state::<AppState>().quick_is_panel.store(panel, Ordering::Release);
+        startup_log("quick_window", Some(&format!("panel={panel}")));
+    }
+    Ok(())
 }
 
 // Below and to the right of the pointer, flipped to stay on its screen.
@@ -780,15 +790,23 @@ fn show_quick_translation(app: &AppHandle) -> Result<(), String> {
     window
         .eval("window.__translatorQuickTranslate && window.__translatorQuickTranslate()")
         .map_err(|error| format!("Failed to start quick translation: {error}"))?;
-    #[cfg(target_os = "macos")]
-    let _ = app.show();
     window
         .show()
         .map_err(|error| format!("Failed to show quick window: {error}"))?;
-    window
-        .set_focus()
-        .map_err(|error| format!("Failed to focus quick window: {error}"))?;
+    // A panel takes the keyboard on its own; a plain window needs Translator
+    // to become the active app, which brings its other windows forward too.
+    if !quick_is_panel(app) {
+        #[cfg(target_os = "macos")]
+        let _ = app.show();
+        window
+            .set_focus()
+            .map_err(|error| format!("Failed to focus quick window: {error}"))?;
+    }
     Ok(())
+}
+
+fn quick_is_panel(app: &AppHandle) -> bool {
+    app.state::<AppState>().quick_is_panel.load(Ordering::Acquire)
 }
 
 // Copying twice: the quick window when it is on and loaded, otherwise the main window.
@@ -809,10 +827,11 @@ fn quick_frontend_ready(state: State<AppState>) {
     state.quick_ready.store(true, Ordering::Release);
 }
 
-// Esc or the close button (`return_focus`): hiding the whole app, as Cmd+H
-// does, returns focus to the app the text was copied from; the main window
-// comes back when Translator is activated again. Clicking another app only
-// hides the window; that app already has focus.
+// Esc or the close button (`return_focus`). The panel never took focus from
+// the app the text was copied from, so hiding it is enough. A plain window
+// made Translator the active app: hiding the whole app, as Cmd+H does, hands
+// focus back, and the main window returns when Translator is activated again.
+// Clicking another app only hides the window; that app already has focus.
 #[tauri::command]
 fn hide_quick_window(app: AppHandle, return_focus: bool) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(QUICK_WINDOW_LABEL) {
@@ -821,7 +840,7 @@ fn hide_quick_window(app: AppHandle, return_focus: bool) -> Result<(), String> {
             .map_err(|error| format!("Failed to hide quick window: {error}"))?;
     }
     #[cfg(target_os = "macos")]
-    if return_focus {
+    if return_focus && !quick_is_panel(&app) {
         let _ = app.hide();
     }
     #[cfg(not(target_os = "macos"))]
@@ -1500,6 +1519,7 @@ fn main() {
             frontend_ready: AtomicBool::new(false),
             pending_clipboard_triggers: AtomicU64::new(0),
             quick_ready: AtomicBool::new(false),
+            quick_is_panel: AtomicBool::new(false),
             bridge_pids: Mutex::new(HashSet::new()),
         })
         .setup(|app| {

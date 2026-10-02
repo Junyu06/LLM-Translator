@@ -17,7 +17,7 @@ It only runs inference against models already available in Ollama.
 
 ## Features
 
-- Global hotkey: `Cmd+C Cmd+C` on macOS, `Ctrl+C Ctrl+C` on Windows. The result opens in a small window next to the pointer (copy, open in the main window, `Esc` to go back), or in the main window if you turn that off
+- Global hotkey: `Cmd+C Cmd+C` on macOS, `Ctrl+C Ctrl+C` on Windows. The result opens in a small window next to the pointer (copy, `Return` to open it in the main window, `Esc` to go back; on macOS it comes up without bringing the main window along), or in the main window if you turn that off
 - Translation only, or side by side with each source paragraph above its translation
 - Per paragraph: show the original inline, copy it, or translate it again
 - Glossary: fixed translations for terms, sent to the model only when the term appears in the text

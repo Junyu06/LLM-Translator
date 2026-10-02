@@ -38,6 +38,8 @@ export type QuickResult = {
   output: string;
   segments: TranslationSegment[];
   detected_source_lang: string | null;
+  // Opened before it finished: the main window translates `source` itself.
+  unfinished?: boolean;
 };
 
 export type PromptStyle = "auto" | "index" | "hy" | "generic" | "custom";

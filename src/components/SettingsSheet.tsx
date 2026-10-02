@@ -149,6 +149,7 @@ export default function SettingsSheet(props: Props) {
             <div className="settings-row">
               <div className="settings-info">
                 <div className="settings-name">{t("prompt")}</div>
+                <div className="settings-desc">{t("prompt_desc")}</div>
                 <div className="settings-desc">
                   {config.prompt_style === "auto"
                     ? t("prompt_desc_auto", { family: familyOf(config.model) ?? t("prompt_generic") })
@@ -185,7 +186,7 @@ export default function SettingsSheet(props: Props) {
               <DraftArea
                 value={config.glossary}
                 rows={5}
-                placeholder={"context window = 上下文窗口\nOllama = Ollama"}
+                placeholder={t("glossary_placeholder")}
                 onCommit={(glossary) => update({ glossary })}
               />
             </div>

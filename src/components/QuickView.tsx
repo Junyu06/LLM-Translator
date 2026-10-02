@@ -26,7 +26,8 @@ const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 // The small window that copying twice opens next to the pointer: the
-// translation only, with copy, open in the main window, and Esc to go back.
+// translation only, with copy, Return to open it in the main window, and Esc
+// to go back.
 export default function QuickView() {
   const [config, setConfig] = useState<AppConfig>(defaultConfig);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -172,8 +173,19 @@ export default function QuickView() {
     }
   };
 
+  // Return: a finished translation moves to the main window as it is; one
+  // still running (or failed) is translated again there.
   const openInMain = () => {
-    if (result && phase === "done") void passQuickResult(result, true).catch((error) => setMessage(errorText(error)));
+    const finished = phase === "done" && result !== null;
+    if (!finished) {
+      runRef.current += 1;
+      if (jobRef.current !== null) void cancelTranslation(jobRef.current);
+      jobRef.current = null;
+    }
+    const handoff: QuickResult = finished
+      ? result
+      : { source: result?.source ?? "", output: "", segments: [], detected_source_lang: null, unfinished: true };
+    void passQuickResult(handoff, true).catch((error) => setMessage(errorText(error)));
   };
 
   // Handlers change every render; the window-level listeners below read the latest ones.
@@ -185,7 +197,11 @@ export default function QuickView() {
     void quickFrontendReady().catch((error) => console.error(error));
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") handlersRef.current.close();
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") handlersRef.current.openInMain();
+      if (event.key === "Enter" && !event.isComposing) {
+        // Not also a click on whichever button has focus.
+        event.preventDefault();
+        handlersRef.current.openInMain();
+      }
     };
     // Clicking another app dismisses the window. A blur in the moment the
     // window is being shown is checked again once it has settled.
@@ -222,8 +238,8 @@ export default function QuickView() {
         <span className="panel-label">{route}</span>
         <div className="row-actions">
           <button className="icon-btn" onClick={() => void copy()} disabled={phase !== "done"} title={t(copied ? "copied" : "copy")}><IconCopy /></button>
-          <button className="icon-btn" onClick={openInMain} disabled={phase !== "done"} title={t("open_in_main")}><IconExpand /></button>
-          <button className="icon-btn" onClick={close} title={t("close")}><IconX /></button>
+          <button className="icon-btn" onClick={openInMain} title={t("open_in_main")}><IconExpand /></button>
+          <button className="icon-btn" onClick={close} title={t("close_quick")}><IconX /></button>
         </div>
       </header>
       <div className="quick-body">

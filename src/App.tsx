@@ -457,6 +457,10 @@ export default function App() {
   // The quick window hands its results here: every finished one goes into
   // history (this window owns it), and "open here" also shows it.
   showResultRef.current = (result: QuickResult) => {
+    if (result.unfinished) {
+      if (result.source.trim()) void runTranslation(result.source);
+      return;
+    }
     runIdRef.current += 1;
     stopCurrentJob();
     setRunning(false);
@@ -472,7 +476,7 @@ export default function App() {
     const store = (result: QuickResult) => setHistory((prev) => addHistoryItem(prev, result.source, result.output, result.segments));
     (globalThis as any).__translatorQuickResult = store;
     (globalThis as any).__translatorShowResult = (result: QuickResult) => {
-      store(result);
+      if (!result.unfinished) store(result);
       showResultRef.current(result);
     };
     return () => {
