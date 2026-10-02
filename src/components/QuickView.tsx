@@ -82,14 +82,15 @@ export default function QuickView() {
       }
     }
     if (runRef.current !== id) return;
+    if (!text.trim()) {
+      handoffRef.current = false;
+      setPhase("error");
+      setMessage(source === "image" ? tr("ocr_no_text") : tr("clipboard_empty"));
+      return;
+    }
     if (handoffRef.current) {
       void passQuickResult({ source: text, output: "", segments: [], detected_source_lang: null, unfinished: true }, true)
         .catch((error) => setMessage(errorText(error)));
-      return;
-    }
-    if (!text.trim()) {
-      setPhase("error");
-      setMessage(source === "image" ? tr("ocr_no_text") : tr("clipboard_empty"));
       return;
     }
 
@@ -168,7 +169,12 @@ export default function QuickView() {
     }
   };
 
-  const close = () => void hideQuickWindow(true);
+  // Hiding also drops a Return still waiting for the clipboard.
+  const dismiss = (returnFocus: boolean) => {
+    handoffRef.current = false;
+    void hideQuickWindow(returnFocus);
+  };
+  const close = () => dismiss(true);
 
   const copy = async () => {
     if (!result?.output) return;
@@ -201,8 +207,8 @@ export default function QuickView() {
   };
 
   // Handlers change every render; the window-level listeners below read the latest ones.
-  const handlersRef = useRef({ run, close, openInMain });
-  handlersRef.current = { run, close, openInMain };
+  const handlersRef = useRef({ run, close, dismiss, openInMain });
+  handlersRef.current = { run, close, dismiss, openInMain };
 
   useEffect(() => {
     (globalThis as any).__translatorQuickTranslate = () => void handlersRef.current.run();
@@ -221,12 +227,12 @@ export default function QuickView() {
     const onBlur = () => {
       const settling = 600 - (Date.now() - shownAtRef.current);
       if (settling <= 0) {
-        void hideQuickWindow(false);
+        handlersRef.current.dismiss(false);
         return;
       }
       window.clearTimeout(recheck);
       recheck = window.setTimeout(() => {
-        if (!document.hasFocus()) void hideQuickWindow(false);
+        if (!document.hasFocus()) handlersRef.current.dismiss(false);
       }, settling);
     };
     window.addEventListener("keydown", onKey);
