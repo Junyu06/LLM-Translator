@@ -7,7 +7,7 @@
 use std::sync::OnceLock;
 
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
-use objc2::sel;
+use objc2::{msg_send, sel};
 use objc2_app_kit::{NSPanel, NSWindowCollectionBehavior, NSWindowStyleMask};
 
 extern "C-unwind" fn can_become_key(_: &AnyObject, _: Sel) -> Bool {
@@ -35,8 +35,17 @@ fn focusable_offset(class: &AnyClass) -> Option<isize> {
     class.instance_variable(c"focusable").map(|ivar| ivar.offset())
 }
 
+// Private AppKit call that tells the window server the window must not
+// activate its app. NSPanel makes it when created non-activating; adding the
+// style afterwards skips it, so clicks would still activate Translator and
+// keys would go to the active app. Wine makes the same call for the same bug.
+fn prevents_activation_sel() -> Sel {
+    sel!(_setPreventsActivation:)
+}
+
 // Turns the window into a panel. Must run on the main thread. Returns false,
-// leaving the window as it was, when its layout is not the one expected.
+// leaving the window as it was, when its layout is not the one expected or
+// AppKit no longer has the private call above.
 pub fn make_panel(window: &tauri::WebviewWindow) -> bool {
     let Some(class) = panel_class() else {
         return false;
@@ -48,13 +57,21 @@ pub fn make_panel(window: &tauri::WebviewWindow) -> bool {
     let current = object.class();
     if current.instance_size() != class.instance_size()
         || focusable_offset(current) != focusable_offset(class)
+        || class.instance_method(prevents_activation_sel()).is_none()
     {
         return false;
     }
     unsafe { AnyObject::set_class(object, class) };
 
     let panel = unsafe { &*(pointer as *const NSPanel) };
+    // Changing the style moves the keyboard focus off the webview; tao puts
+    // it back after its own style changes too.
+    let responder = panel.firstResponder();
     panel.setStyleMask(panel.styleMask() | NSWindowStyleMask::NonactivatingPanel);
+    let _: () = unsafe { msg_send![panel, _setPreventsActivation: true] };
+    if let Some(responder) = responder {
+        panel.makeFirstResponder(Some(&responder));
+    }
     panel.setFloatingPanel(true);
     panel.setBecomesKeyOnlyIfNeeded(false);
     // Translator is usually not the active app while the panel is up.

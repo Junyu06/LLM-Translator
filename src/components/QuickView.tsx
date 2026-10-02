@@ -37,6 +37,8 @@ export default function QuickView() {
   const runRef = useRef(0);
   const jobRef = useRef<number | null>(null);
   const shownAtRef = useRef(0);
+  // Return pressed while the clipboard was still being read: hand over once it is.
+  const handoffRef = useRef(false);
   const t = translator(config.ui_lang);
 
   const run = async () => {
@@ -46,6 +48,7 @@ export default function QuickView() {
     if (jobRef.current !== null) void cancelTranslation(jobRef.current);
     jobRef.current = null;
     shownAtRef.current = Date.now();
+    handoffRef.current = false;
     setPhase("reading");
     setResult(null);
     setMessage("");
@@ -79,6 +82,11 @@ export default function QuickView() {
       }
     }
     if (runRef.current !== id) return;
+    if (handoffRef.current) {
+      void passQuickResult({ source: text, output: "", segments: [], detected_source_lang: null, unfinished: true }, true)
+        .catch((error) => setMessage(errorText(error)));
+      return;
+    }
     if (!text.trim()) {
       setPhase("error");
       setMessage(source === "image" ? tr("ocr_no_text") : tr("clipboard_empty"));
@@ -176,6 +184,10 @@ export default function QuickView() {
   // Return: a finished translation moves to the main window as it is; one
   // still running (or failed) is translated again there.
   const openInMain = () => {
+    if (phase === "reading") {
+      handoffRef.current = true;
+      return;
+    }
     const finished = phase === "done" && result !== null;
     if (!finished) {
       runRef.current += 1;
