@@ -23,8 +23,8 @@ class ModelValidationTests(unittest.TestCase):
             TranslationRequest(text="hello", translation_mode="rich")
 
     def test_translation_request_rejects_wrong_primitive_types(self) -> None:
-        with self.assertRaisesRegex(ValueError, "use_context"):
-            TranslationRequest(text="hello", use_context="yes")
+        with self.assertRaisesRegex(ValueError, "collapse_newlines"):
+            TranslationRequest(text="hello", collapse_newlines="yes")
         with self.assertRaisesRegex(ValueError, "max_chars"):
             TranslationRequest(text="hello", max_chars="500")
 

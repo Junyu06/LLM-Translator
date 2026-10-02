@@ -1,9 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -21,6 +21,8 @@ use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 mod hotkey_macos;
 #[cfg(target_os = "windows")]
 mod hotkey_windows;
+#[cfg(target_os = "macos")]
+mod panel_macos;
 
 const TRAY_OPEN_ID: &str = "tray_open";
 const TRAY_TRANSLATE_CLIPBOARD_ID: &str = "tray_translate_clipboard";
@@ -31,7 +33,9 @@ const EVENT_TRAY_OPENED: &str = "translator://tray-opened";
 const EVENT_HOTKEY_ERROR: &str = "translator://hotkey-error";
 #[cfg(target_os = "windows")]
 const BRIDGE_RESOURCE_EXE: &str = "translator-bridge.exe";
-#[cfg(target_os = "windows")]
+#[cfg(target_os = "macos")]
+const BRIDGE_RESOURCE_EXE: &str = "translator-bridge";
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const BRIDGE_RESOURCE_DIR: &str = "translator-bridge";
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -44,8 +48,10 @@ struct RunningTranslation {
 struct AppState {
     quitting: AtomicBool,
     next_job_id: AtomicU64,
-    canceled_job_id: AtomicU64,
-    translation: Mutex<Option<RunningTranslation>>,
+    canceled_jobs: Mutex<HashSet<u64>>,
+    // One streaming translation per window (by label): a new one replaces
+    // that window's previous job and leaves the other window's alone.
+    translation: Mutex<HashMap<String, RunningTranslation>>,
     translation_events: Mutex<HashMap<u64, Vec<Value>>>,
     hotkey_listener: Mutex<Option<HotkeyListener>>,
     hotkey_status: Mutex<HotkeyStatus>,
@@ -53,6 +59,13 @@ struct AppState {
     hotkey_starting: AtomicBool,
     frontend_ready: AtomicBool,
     pending_clipboard_triggers: AtomicU64,
+    // The quick window's page has loaded and registered its trigger.
+    quick_ready: AtomicBool,
+    // macOS: the quick window is a non-activating panel (see panel_macos).
+    quick_is_panel: AtomicBool,
+    // Process ids of one-shot bridge commands still running (translate,
+    // read-clipboard, …), so quitting does not leave them behind.
+    bridge_pids: Mutex<HashSet<u32>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -112,6 +125,12 @@ fn startup_log(stage: &str, details: Option<&str>) {
 }
 
 fn workspace_root() -> Result<PathBuf, String> {
+    // The macOS app runs the Python bridge from a checkout. TRANSLATOR_BACKEND_ROOT
+    // at build time points it at a checkout other than the one being built,
+    // e.g. when building on another machine.
+    if let Some(root) = option_env!("TRANSLATOR_BACKEND_ROOT") {
+        return Ok(PathBuf::from(root));
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .map(PathBuf::from)
@@ -198,7 +217,6 @@ fn default_config() -> Value {
     json!({
         "source_lang": "auto",
         "target_lang": "zh",
-        "use_context": false,
         "collapse_newlines": false,
         "output_mode": "translations_only",
         "translation_mode": "normal",
@@ -210,7 +228,11 @@ fn default_config() -> Value {
         "hotkey_enabled": true,
         "minimize_to_tray": true,
         "theme": "system",
-        "ui_lang": "en"
+        "ui_lang": "en",
+        "glossary": "",
+        "prompt_style": "auto",
+        "custom_prompt": "",
+        "quick_window": true
     })
 }
 
@@ -228,16 +250,50 @@ fn merge_object_config(base: &mut Value, patch: Value) {
 }
 
 fn load_config_value() -> Value {
+    read_config().unwrap_or_else(|error| {
+        eprintln!("main: {error}");
+        default_config()
+    })
+}
+
+// Defaults merged with the saved file. An unreadable file (bad UTF-8, bad JSON,
+// not an object) is moved aside first; if that fails this returns an error so
+// a save cannot overwrite the only copy.
+fn read_config() -> Result<Value, String> {
     let mut config = default_config();
     let path = config_path();
-    let Ok(raw) = fs::read_to_string(path) else {
-        return config;
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(config),
+        Err(error) => return Err(format!("Failed to read config {}: {error}", path.display())),
     };
-    let Ok(saved) = serde_json::from_str::<Value>(&raw) else {
-        return config;
-    };
-    merge_object_config(&mut config, saved);
-    config
+    let saved = std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .filter(Value::is_object);
+    match saved {
+        Some(saved) => merge_object_config(&mut config, saved),
+        None => back_up_corrupt_config(&path, &bytes)?,
+    }
+    Ok(config)
+}
+
+// Move an unreadable config aside, never overwriting an earlier backup.
+fn back_up_corrupt_config(path: &PathBuf, bytes: &[u8]) -> Result<(), String> {
+    let mut backup = path.with_extension("json.corrupt");
+    let mut index = 1;
+    while backup.exists() {
+        backup = path.with_extension(format!("json.corrupt.{index}"));
+        index += 1;
+    }
+    fs::write(&backup, bytes).map_err(|error| {
+        format!("Config {} is unreadable and could not be backed up: {error}", path.display())
+    })?;
+    fs::remove_file(path).map_err(|error| {
+        format!("Config {} was backed up but could not be moved aside: {error}", path.display())
+    })?;
+    eprintln!("main: config unreadable, moved to {}", backup.display());
+    Ok(())
 }
 
 fn save_config_value(patch: &str) -> Result<String, String> {
@@ -251,7 +307,7 @@ fn save_config_value(patch: &str) -> Result<String, String> {
         return Err("Config payload must be a JSON object.".to_string());
     }
 
-    let mut config = load_config_value();
+    let mut config = read_config()?;
     merge_object_config(&mut config, patch);
 
     let path = config_path();
@@ -290,7 +346,8 @@ fn tray_icon_image() -> Result<tauri::image::Image<'static>, String> {
         .map_err(|error| format!("Failed to load tray icon: {error}"))
 }
 
-#[cfg(target_os = "windows")]
+// The bridge PyInstaller built into the app's resources (see Translator_bridge_*.spec).
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn bridge_resource_executable(app: &AppHandle) -> Option<PathBuf> {
     let mut candidates = Vec::new();
 
@@ -323,13 +380,13 @@ fn bridge_resource_executable(app: &AppHandle) -> Option<PathBuf> {
     None
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn is_executable_file(path: &Path) -> bool {
     path.is_file()
 }
 
 pub(crate) fn bridge_process(app: &AppHandle, command: &str) -> Result<Command, String> {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
         if let Some(executable) = bridge_resource_executable(app) {
             let mut process = Command::new(executable);
@@ -338,7 +395,10 @@ pub(crate) fn bridge_process(app: &AppHandle, command: &str) -> Result<Command, 
             return Ok(process);
         }
 
-        #[cfg(not(debug_assertions))]
+        // A Windows release always ships the bridge. A macOS build without it
+        // (development, or built without tauri.macos-bridge.conf.json) runs
+        // the bridge from the source checkout below.
+        #[cfg(all(target_os = "windows", not(debug_assertions)))]
         {
             return Err(format!(
                 "Packaged Python bridge resource not found. Expected {BRIDGE_RESOURCE_DIR}/{BRIDGE_RESOURCE_EXE} in the app resources directory."
@@ -346,7 +406,7 @@ pub(crate) fn bridge_process(app: &AppHandle, command: &str) -> Result<Command, 
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     let _ = app;
 
     let root = workspace_root()?;
@@ -355,6 +415,45 @@ pub(crate) fn bridge_process(app: &AppHandle, command: &str) -> Result<Command, 
     process.current_dir(root).arg(script).arg(command);
     hide_child_console(&mut process);
     Ok(process)
+}
+
+// Keeps a one-shot bridge process in AppState::bridge_pids until it has been waited for.
+struct RegisteredBridge {
+    app: AppHandle,
+    pid: u32,
+}
+
+impl RegisteredBridge {
+    fn new(app: &AppHandle, pid: u32) -> Self {
+        app.state::<AppState>().bridge_pids.lock().unwrap().insert(pid);
+        Self { app: app.clone(), pid }
+    }
+}
+
+impl Drop for RegisteredBridge {
+    fn drop(&mut self) {
+        self.app.state::<AppState>().bridge_pids.lock().unwrap().remove(&self.pid);
+    }
+}
+
+fn kill_bridge_processes(state: &AppState) {
+    let pids: Vec<u32> = state.bridge_pids.lock().unwrap().drain().collect();
+    for pid in pids {
+        #[cfg(target_os = "windows")]
+        let mut command = {
+            let mut command = Command::new("taskkill");
+            command.args(["/F", "/T", "/PID", &pid.to_string()]);
+            hide_child_console(&mut command);
+            command
+        };
+        #[cfg(not(target_os = "windows"))]
+        let mut command = {
+            let mut command = Command::new("kill");
+            command.arg(pid.to_string());
+            command
+        };
+        let _ = command.stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
 }
 
 fn run_bridge(app: &AppHandle, command: &str, input: Option<&str>) -> Result<String, String> {
@@ -382,6 +481,8 @@ fn run_bridge(app: &AppHandle, command: &str, input: Option<&str>) -> Result<Str
         }
     };
 
+    let registered = RegisteredBridge::new(app, child.id());
+
     if let Some(payload) = input {
         if let Some(mut stdin) = child.stdin.take() {
             stdin
@@ -393,6 +494,7 @@ fn run_bridge(app: &AppHandle, command: &str, input: Option<&str>) -> Result<Str
     let output = child
         .wait_with_output()
         .map_err(|error| format!("Failed to read Python bridge output: {error}"))?;
+    drop(registered);
 
     if output.status.success() {
         return String::from_utf8(output.stdout)
@@ -446,6 +548,25 @@ fn show_main_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn quit_app(app: &AppHandle) {
+    app.state::<AppState>().quitting.store(true, Ordering::Relaxed);
+    release_for_exit(app);
+    app.exit(0);
+}
+
+// Everything this app started that would outlive it. Runs on the main thread
+// while quitting, so it never waits on the hotkey thread.
+fn release_for_exit(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let listener = state.hotkey_listener.lock().unwrap().take();
+    if let Some(_listener) = listener {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        _listener.stop_without_waiting();
+    }
+    let _ = cancel_running_translation(app, &state, None, None, false);
+    kill_bridge_processes(&state);
+}
+
 fn should_minimize_to_tray(app: &AppHandle) -> bool {
     let _ = app;
     load_config_value()
@@ -460,49 +581,6 @@ fn hotkey_enabled(app: &AppHandle) -> bool {
         .get("hotkey_enabled")
         .and_then(Value::as_bool)
         .unwrap_or(true)
-}
-
-fn read_clipboard_text_impl() -> Result<String, String> {
-    if cfg!(target_os = "macos") {
-        let output = Command::new(python_executable()?)
-            .args([
-                "-c",
-                "import pyperclip, sys; sys.stdout.write(pyperclip.paste() or '')",
-            ])
-            .output()
-            .map_err(|error| format!("Failed to read clipboard via pyperclip: {error}"))?;
-        if output.status.success() {
-            return String::from_utf8(output.stdout)
-                .map_err(|error| format!("Clipboard text was not valid UTF-8: {error}"));
-        }
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            "pyperclip clipboard read exited unsuccessfully".to_string()
-        } else {
-            stderr
-        });
-    }
-
-    if cfg!(target_os = "windows") {
-        let mut process = Command::new("powershell");
-        hide_child_console(&mut process);
-        let output = process
-            .args(["-NoProfile", "-Command", "Get-Clipboard -Raw"])
-            .output()
-            .map_err(|error| format!("Failed to read clipboard via PowerShell: {error}"))?;
-        if output.status.success() {
-            return String::from_utf8(output.stdout)
-                .map_err(|error| format!("Clipboard text was not valid UTF-8: {error}"));
-        }
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            "PowerShell Get-Clipboard exited unsuccessfully".to_string()
-        } else {
-            stderr
-        });
-    }
-
-    Err("Clipboard text commands are implemented only for macOS and Windows.".to_string())
 }
 
 fn write_clipboard_text_impl(payload: &str) -> Result<(), String> {
@@ -582,8 +660,18 @@ pub(crate) fn emit_clipboard_translation_request(app: &AppHandle) -> Result<(), 
     let window = main_window(app)?;
 
     // Let the source app finish the second Cmd+C and update the clipboard before we steal focus.
+    // The frontend then reads the clipboard itself, so text and images go through
+    // the same read-clipboard decision as the clipboard button.
     std::thread::sleep(std::time::Duration::from_millis(140));
-    let clipboard_text = read_clipboard_text_impl().ok();
+    let script = r#"
+          try {
+            const ok = typeof window.__translatorTriggerClipboardTranslation === 'function';
+            console.log('[translator] hotkey eval attempt: bridge=', ok);
+            if (ok) window.__translatorTriggerClipboardTranslation();
+          } catch (e) {
+            console.log('[translator] hotkey eval error', e);
+          }
+        "#;
 
     // Hidden windows can still accept eval, so delay bringing the app forward until after the frontend
     // has started reading the clipboard.
@@ -601,36 +689,7 @@ pub(crate) fn emit_clipboard_translation_request(app: &AppHandle) -> Result<(), 
             std::thread::sleep(std::time::Duration::from_millis(delay_ms));
         }
 
-        let payload = clipboard_text
-            .as_ref()
-            .map(|text| serde_json::to_string(text))
-            .transpose()
-            .map_err(|error| format!("Failed to serialize clipboard text: {error}"))?;
-        let script = match payload {
-            Some(text) => format!(
-                r#"
-                  try {{
-                    const ok = typeof window.__translatorTriggerClipboardTranslation === 'function';
-                    console.log('[translator] hotkey eval attempt: bridge=', ok);
-                    if (ok) window.__translatorTriggerClipboardTranslation({text});
-                  }} catch (e) {{
-                    console.log('[translator] hotkey eval error', e);
-                  }}
-                "#
-            ),
-            None => r#"
-                  try {
-                    const ok = typeof window.__translatorTriggerClipboardTranslation === 'function';
-                    console.log('[translator] hotkey eval attempt: bridge=', ok);
-                    if (ok) window.__translatorTriggerClipboardTranslation();
-                  } catch (e) {
-                    console.log('[translator] hotkey eval error', e);
-                  }
-                "#
-            .to_string(),
-        };
-
-        match window.eval(&script) {
+        match window.eval(script) {
             Ok(()) => {
                 eprintln!("main: clipboard trigger eval sent (attempt={attempt})");
                 show_main_window(app)?;
@@ -651,6 +710,162 @@ pub(crate) fn emit_clipboard_translation_request(app: &AppHandle) -> Result<(), 
         + 1;
     eprintln!("main: queued clipboard trigger after eval failures (pending={pending})");
     Err(last_error.unwrap_or_else(|| "Failed to eval clipboard trigger.".to_string()))
+}
+
+// ---------- quick window ----------
+//
+// Copying twice shows the translation in a small window next to the pointer
+// instead of bringing up the main window. Esc or the close button hides it
+// and hands focus back to the app the text came from.
+
+const QUICK_WINDOW_LABEL: &str = "quick";
+const QUICK_WIDTH: f64 = 460.0;
+const QUICK_HEIGHT: f64 = 300.0;
+
+fn quick_window_enabled() -> bool {
+    load_config_value()
+        .get("quick_window")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+fn create_quick_window(app: &AppHandle) -> Result<(), String> {
+    if app.get_webview_window(QUICK_WINDOW_LABEL).is_some() {
+        return Ok(());
+    }
+    let builder = tauri::WebviewWindowBuilder::new(app, QUICK_WINDOW_LABEL, tauri::WebviewUrl::App("index.html".into()))
+        .title("Translator")
+        .inner_size(QUICK_WIDTH, QUICK_HEIGHT)
+        .min_inner_size(320.0, 160.0)
+        .resizable(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false);
+    let _window = builder
+        .build()
+        .map_err(|error| format!("Failed to create quick window: {error}"))?;
+    #[cfg(target_os = "macos")]
+    {
+        let panel = panel_macos::make_panel(&_window);
+        app.state::<AppState>().quick_is_panel.store(panel, Ordering::Release);
+        startup_log("quick_window", Some(&format!("panel={panel}")));
+    }
+    Ok(())
+}
+
+// Below and to the right of the pointer, flipped to stay on its screen.
+fn place_near_pointer(app: &AppHandle, window: &tauri::WebviewWindow) {
+    let Ok(pointer) = app.cursor_position() else {
+        return;
+    };
+    let Ok(Some(monitor)) = app.monitor_from_point(pointer.x, pointer.y) else {
+        return;
+    };
+    let size = window
+        .outer_size()
+        .map(|size| (size.width as f64, size.height as f64))
+        .unwrap_or((QUICK_WIDTH * monitor.scale_factor(), QUICK_HEIGHT * monitor.scale_factor()));
+    let gap = 14.0 * monitor.scale_factor();
+    let area = monitor.work_area();
+    let (left, top) = (area.position.x as f64, area.position.y as f64);
+    let (right, bottom) = (left + area.size.width as f64, top + area.size.height as f64);
+    let mut x = pointer.x + gap;
+    let mut y = pointer.y + gap;
+    if x + size.0 > right {
+        x = (pointer.x - size.0 - gap).max(left);
+    }
+    if y + size.1 > bottom {
+        y = (pointer.y - size.1 - gap).max(top);
+    }
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+fn show_quick_translation(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(QUICK_WINDOW_LABEL)
+        .ok_or_else(|| "Quick window not found".to_string())?;
+    // Let the source app finish the second copy before the window reads the clipboard.
+    std::thread::sleep(std::time::Duration::from_millis(140));
+    place_near_pointer(app, &window);
+    window
+        .eval("window.__translatorQuickTranslate && window.__translatorQuickTranslate()")
+        .map_err(|error| format!("Failed to start quick translation: {error}"))?;
+    window
+        .show()
+        .map_err(|error| format!("Failed to show quick window: {error}"))?;
+    // A panel takes the keyboard on its own; a plain window needs Translator
+    // to become the active app, which brings its other windows forward too.
+    if !quick_is_panel(app) {
+        #[cfg(target_os = "macos")]
+        let _ = app.show();
+        window
+            .set_focus()
+            .map_err(|error| format!("Failed to focus quick window: {error}"))?;
+    }
+    Ok(())
+}
+
+fn quick_is_panel(app: &AppHandle) -> bool {
+    app.state::<AppState>().quick_is_panel.load(Ordering::Acquire)
+}
+
+// Copying twice: the quick window when it is on and loaded, otherwise the main window.
+pub(crate) fn handle_double_copy(app: &AppHandle) -> Result<(), String> {
+    let ready = app.state::<AppState>().quick_ready.load(Ordering::Acquire);
+    if ready && quick_window_enabled() {
+        match show_quick_translation(app) {
+            Ok(()) => return Ok(()),
+            Err(error) => eprintln!("main: quick window failed, using the main window: {error}"),
+        }
+    }
+    emit_clipboard_translation_request(app)
+}
+
+#[tauri::command]
+fn quick_frontend_ready(state: State<AppState>) {
+    startup_log("quick_frontend_ready", None);
+    state.quick_ready.store(true, Ordering::Release);
+}
+
+// Esc or the close button (`return_focus`). The panel never took focus from
+// the app the text was copied from, so hiding it is enough. A plain window
+// made Translator the active app: hiding the whole app, as Cmd+H does, hands
+// focus back, and the main window returns when Translator is activated again.
+// Clicking another app only hides the window; that app already has focus.
+#[tauri::command]
+fn hide_quick_window(app: AppHandle, return_focus: bool) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(QUICK_WINDOW_LABEL) {
+        window
+            .hide()
+            .map_err(|error| format!("Failed to hide quick window: {error}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    if return_focus && !quick_is_panel(&app) {
+        let _ = app.hide();
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = return_focus;
+    Ok(())
+}
+
+// Hand a finished quick translation to the main window: `show` puts it on
+// screen there, otherwise it only goes into history (the main window owns it).
+#[tauri::command]
+fn quick_result(app: AppHandle, payload: String, show: bool) -> Result<(), String> {
+    let value: Value = serde_json::from_str(&payload)
+        .map_err(|error| format!("Failed to decode quick result: {error}"))?;
+    let window = main_window(&app)?;
+    let function = if show { "__translatorShowResult" } else { "__translatorQuickResult" };
+    window
+        .eval(&format!("window.{function} && window.{function}({value})"))
+        .map_err(|error| format!("Failed to pass quick result: {error}"))?;
+    if show {
+        if let Some(quick) = app.get_webview_window(QUICK_WINDOW_LABEL) {
+            let _ = quick.hide();
+        }
+        show_main_window(&app)?;
+    }
+    Ok(())
 }
 
 fn flush_pending_clipboard_triggers(app: &AppHandle) {
@@ -727,29 +942,31 @@ fn build_tray(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// Stops streaming translations: the one with `expected_job_id`, else the one
+// `owner` (a window label) runs, else all of them.
 fn cancel_running_translation(
     _app: &AppHandle,
     state: &AppState,
+    owner: Option<&str>,
     expected_job_id: Option<u64>,
     emit_event: bool,
 ) -> Result<Option<u64>, String> {
-    let running = {
+    let stopped: Vec<RunningTranslation> = {
         let mut guard = state.translation.lock().unwrap();
-        if let Some(current) = guard.as_ref() {
-            if expected_job_id.is_none() || expected_job_id == Some(current.job_id) {
-                guard.take()
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        let keys: Vec<String> = guard
+            .iter()
+            .filter(|(key, running)| match (expected_job_id, owner) {
+                (Some(job_id), _) => running.job_id == job_id,
+                (None, Some(owner)) => key.as_str() == owner,
+                (None, None) => true,
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        keys.iter().filter_map(|key| guard.remove(key)).collect()
     };
 
-    if let Some(running) = running {
-        state
-            .canceled_job_id
-            .store(running.job_id, Ordering::Relaxed);
+    for running in &stopped {
+        state.canceled_jobs.lock().unwrap().insert(running.job_id);
         let mut child = running.child.lock().unwrap();
         let _ = child.kill();
         let _ = child.wait();
@@ -764,11 +981,9 @@ fn cancel_running_translation(
                 }),
             );
         }
-
-        return Ok(Some(running.job_id));
     }
 
-    Ok(None)
+    Ok(stopped.first().map(|running| running.job_id))
 }
 
 fn enqueue_translation_event(state: &AppState, job_id: u64, payload: Value) {
@@ -876,10 +1091,11 @@ fn spawn_hotkey_listener(app: &AppHandle, state: &AppState) -> Result<(), String
 
 fn spawn_translation_stream(
     app: &AppHandle,
+    owner: &str,
     payload: &str,
     state: &AppState,
 ) -> Result<u64, String> {
-    let _ = cancel_running_translation(app, state, None, false)?;
+    let _ = cancel_running_translation(app, state, Some(owner), None, false)?;
 
     let job_id = state.next_job_id.fetch_add(1, Ordering::Relaxed) + 1;
 
@@ -928,10 +1144,13 @@ fn spawn_translation_stream(
 
     {
         let mut guard = state.translation.lock().unwrap();
-        *guard = Some(RunningTranslation {
-            job_id,
-            child: Arc::clone(&child),
-        });
+        guard.insert(
+            owner.to_string(),
+            RunningTranslation {
+                job_id,
+                child: Arc::clone(&child),
+            },
+        );
     }
     {
         let mut guard = state.translation_events.lock().unwrap();
@@ -941,6 +1160,7 @@ fn spawn_translation_stream(
     let app_handle = app.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
+        let mut finished = false;
         for line in reader.lines() {
             let Ok(line) = line else {
                 enqueue_translation_event(
@@ -969,6 +1189,12 @@ fn spawn_translation_stream(
                             }
                         }
                         object.insert("job_id".into(), Value::from(job_id));
+                        if matches!(
+                            object.get("event").and_then(Value::as_str),
+                            Some("completed" | "error")
+                        ) {
+                            finished = true;
+                        }
                     }
                     enqueue_translation_event(&app_handle.state::<AppState>(), job_id, payload);
                 }
@@ -986,27 +1212,43 @@ fn spawn_translation_stream(
             }
         }
 
-        let canceled_job_id = app_handle
-            .state::<AppState>()
-            .canceled_job_id
-            .load(Ordering::Relaxed);
         {
             let app_state = app_handle.state::<AppState>();
             let mut guard = app_state.translation.lock().unwrap();
-            if guard.as_ref().map(|running| running.job_id) == Some(job_id) {
-                guard.take();
-            }
+            guard.retain(|_, running| running.job_id != job_id);
         }
 
-        let _ = child.lock().unwrap().wait();
+        let exit_status = child.lock().unwrap().wait();
+        let canceled = app_handle
+            .state::<AppState>()
+            .canceled_jobs
+            .lock()
+            .unwrap()
+            .remove(&job_id);
 
-        if canceled_job_id == job_id {
+        if canceled {
             enqueue_translation_event(
                 &app_handle.state::<AppState>(),
                 job_id,
                 json!({
                     "job_id": job_id,
                     "event": "canceled",
+                }),
+            );
+        } else if !finished {
+            // The bridge crashed or was killed without reporting; without this
+            // event the UI would keep waiting forever.
+            let status = exit_status
+                .map(|status| status.to_string())
+                .unwrap_or_else(|error| error.to_string());
+            enqueue_translation_event(
+                &app_handle.state::<AppState>(),
+                job_id,
+                json!({
+                    "job_id": job_id,
+                    "event": "error",
+                    "code": "bridge_exited",
+                    "message": format!("Translation process stopped unexpectedly ({status})."),
                 }),
             );
         }
@@ -1052,6 +1294,13 @@ fn get_config() -> Result<String, String> {
 #[tauri::command]
 fn save_config(app: AppHandle, payload: String, state: State<AppState>) -> Result<String, String> {
     let result = save_config_value(&payload)?;
+    // Theme, font size and other UI settings must not restart the hotkey listener.
+    let touches_hotkey = serde_json::from_str::<Value>(&payload)
+        .map(|patch| patch.get("hotkey_enabled").is_some())
+        .unwrap_or(false);
+    if !touches_hotkey {
+        return Ok(result);
+    }
     #[cfg(target_os = "windows")]
     {
         if state.frontend_ready.load(Ordering::Acquire) {
@@ -1085,18 +1334,32 @@ fn hotkey_status(state: State<AppState>) -> HotkeyStatus {
     state.hotkey_status.lock().unwrap().clone()
 }
 
+// Bridge calls that can wait on the network or OCR run on a blocking thread:
+// synchronous Tauri commands run on the main thread and would freeze the window.
 #[tauri::command]
-fn translate(app: AppHandle, payload: String) -> Result<String, String> {
-    run_bridge(&app, "translate", Some(&payload))
+async fn translate(app: AppHandle, payload: String) -> Result<String, String> {
+    run_bridge_off_main(app, "translate", Some(payload)).await
+}
+
+async fn run_bridge_off_main(app: AppHandle, command: &'static str, input: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || run_bridge(&app, command, input.as_deref()))
+        .await
+        .map_err(|error| format!("Bridge task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn list_models(app: AppHandle, payload: String) -> Result<String, String> {
+    run_bridge_off_main(app, "list-models", Some(payload)).await
 }
 
 #[tauri::command]
 fn start_translation_stream(
     app: AppHandle,
+    window: tauri::Window,
     payload: String,
     state: State<AppState>,
 ) -> Result<u64, String> {
-    spawn_translation_stream(&app, &payload, &state)
+    spawn_translation_stream(&app, window.label(), &payload, &state)
 }
 
 #[tauri::command]
@@ -1127,7 +1390,11 @@ fn cancel_translation(
     job_id: Option<u64>,
     state: State<AppState>,
 ) -> Result<bool, String> {
-    Ok(cancel_running_translation(&app, &state, job_id, true)?.is_some())
+    // Without a job id this stops nothing: a window always names its own job.
+    if job_id.is_none() {
+        return Ok(false);
+    }
+    Ok(cancel_running_translation(&app, &state, None, job_id, true)?.is_some())
 }
 
 #[tauri::command]
@@ -1135,10 +1402,6 @@ fn show_main_window_command(app: AppHandle) -> Result<(), String> {
     show_main_window(&app)
 }
 
-#[tauri::command]
-fn read_clipboard_text() -> Result<String, String> {
-    read_clipboard_text_impl()
-}
 
 #[tauri::command]
 fn write_clipboard_text(payload: String) -> Result<(), String> {
@@ -1146,8 +1409,8 @@ fn write_clipboard_text(payload: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn run_clipboard_ocr(app: AppHandle) -> Result<String, String> {
-    run_bridge(&app, "ocr-clipboard", None)
+async fn read_clipboard(app: AppHandle) -> Result<String, String> {
+    run_bridge_off_main(app, "read-clipboard", None).await
 }
 
 #[cfg(target_os = "macos")]
@@ -1243,8 +1506,8 @@ fn main() {
         .manage(AppState {
             quitting: AtomicBool::new(false),
             next_job_id: AtomicU64::new(0),
-            canceled_job_id: AtomicU64::new(0),
-            translation: Mutex::new(None),
+            canceled_jobs: Mutex::new(HashSet::new()),
+            translation: Mutex::new(HashMap::new()),
             translation_events: Mutex::new(HashMap::new()),
             hotkey_listener: Mutex::new(None),
             hotkey_status: Mutex::new(HotkeyStatus {
@@ -1255,10 +1518,16 @@ fn main() {
             hotkey_starting: AtomicBool::new(false),
             frontend_ready: AtomicBool::new(false),
             pending_clipboard_triggers: AtomicU64::new(0),
+            quick_ready: AtomicBool::new(false),
+            quick_is_panel: AtomicBool::new(false),
+            bridge_pids: Mutex::new(HashSet::new()),
         })
         .setup(|app| {
             startup_log("setup_start", None);
             build_tray(&app.handle())?;
+            if let Err(error) = create_quick_window(&app.handle()) {
+                eprintln!("main: {error}");
+            }
             match main_window(&app.handle()) {
                 Ok(_) => startup_log("window_ready", Some("label=main")),
                 Err(error) => {
@@ -1276,14 +1545,7 @@ fn main() {
             TRAY_TRANSLATE_CLIPBOARD_ID => {
                 let _ = emit_clipboard_translation_request(app);
             }
-            TRAY_QUIT_ID => {
-                app.state::<AppState>()
-                    .quitting
-                    .store(true, Ordering::Relaxed);
-                stop_hotkey_listener(&app.state::<AppState>());
-                let _ = cancel_running_translation(app, &app.state::<AppState>(), None, false);
-                app.exit(0);
-            }
+            TRAY_QUIT_ID => quit_app(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -1300,6 +1562,11 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == QUICK_WINDOW_LABEL {
+                    api.prevent_close();
+                    let _ = hide_quick_window(window.app_handle().clone(), true);
+                    return;
+                }
                 if window.label() != "main" {
                     return;
                 }
@@ -1322,6 +1589,11 @@ fn main() {
                         let _ = app.set_dock_visibility(false);
                         let _ = app.hide();
                     }
+                } else {
+                    // The hidden quick window would otherwise keep the app
+                    // running with no main window to come back to.
+                    api.prevent_close();
+                    quit_app(window.app_handle());
                 }
             }
         })
@@ -1336,15 +1608,18 @@ fn main() {
             take_translation_events,
             cancel_translation,
             show_main_window_command,
-            read_clipboard_text,
             write_clipboard_text,
-            run_clipboard_ocr,
+            read_clipboard,
+            list_models,
             check_accessibility,
             request_accessibility,
             check_input_monitoring,
             request_input_monitoring,
             open_privacy_settings,
-            frontend_ready
+            frontend_ready,
+            quick_frontend_ready,
+            hide_quick_window,
+            quick_result
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -1357,6 +1632,9 @@ fn main() {
         } => {
             let _ = show_main_window(_app);
         }
+        // Every way out (Cmd+Q, the app menu, the tray, closing the window)
+        // ends the bridge processes this app started.
+        tauri::RunEvent::Exit => release_for_exit(_app),
         _ => {}
     });
 }

@@ -1,4 +1,4 @@
-import type { AppConfig, TranslationRequest, TranslationResponse } from "../types";
+import type { AppConfig, QuickResult, TranslationRequest, TranslationResponse } from "../types";
 
 const API_BASE = "http://127.0.0.1:8765";
 
@@ -13,7 +13,8 @@ export type HotkeyStatus = {
   error: string | null;
 };
 
-type OcrResponse = {
+export type ClipboardCapture = {
+  source: "text" | "image" | "empty";
   text: string;
 };
 
@@ -113,6 +114,17 @@ export async function translate(payload: TranslationRequest): Promise<Translatio
   });
 }
 
+export async function listModels(config: Pick<AppConfig, "mode" | "host">): Promise<string[]> {
+  if (isTauriRuntime()) {
+    const result = await invokeJson<{ models: string[] }>("list_models", { mode: config.mode, host: config.host });
+    return result.models;
+  }
+  const host = config.mode === "http" && config.host.trim() ? config.host.trim().replace(/\/+$/, "") : "http://127.0.0.1:11434";
+  const response = await fetch(`${host}/api/tags`);
+  const body = (await response.json()) as { models?: Array<{ name: string }> };
+  return (body.models ?? []).map((model) => model.name).sort();
+}
+
 export async function startTranslationStream(payload: TranslationRequest): Promise<number> {
   if (!isTauriRuntime()) {
     throw new Error("Streaming translation is only available in the Tauri runtime.");
@@ -200,13 +212,6 @@ export async function onHotkeyError(callback: (message: string) => void): Promis
   });
 }
 
-export async function showMainWindow(): Promise<void> {
-  if (!isTauriRuntime()) {
-    return;
-  }
-  await invokeVoid("show_main_window_command");
-}
-
 export async function syncHotkeyListener(): Promise<void> {
   if (!isTauriRuntime()) {
     return;
@@ -214,13 +219,15 @@ export async function syncHotkeyListener(): Promise<void> {
   await invokeVoid("sync_hotkey_listener");
 }
 
-export async function readClipboardText(): Promise<string> {
+// Text comes back as-is; an image comes back as OCR text with source "image".
+export async function readClipboard(): Promise<ClipboardCapture> {
   if (isTauriRuntime()) {
-    return invokeRaw<string>("read_clipboard_text");
+    return invokeJson<ClipboardCapture>("read_clipboard");
   }
 
   if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
-    return navigator.clipboard.readText();
+    const text = await navigator.clipboard.readText();
+    return { source: text.trim() ? "text" : "empty", text };
   }
 
   throw new Error("Clipboard read is not available in this runtime.");
@@ -272,47 +279,9 @@ export async function requestInputMonitoring(): Promise<boolean> {
   return invoke<boolean>("request_input_monitoring");
 }
 
-export async function runClipboardOcr(): Promise<string> {
-  if (!isTauriRuntime()) {
-    throw new Error("Clipboard OCR is only available in the Tauri runtime.");
-  }
-  const result = await invokeJson<OcrResponse>("run_clipboard_ocr");
-  return result.text;
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
 export async function notifyFrontendReady(): Promise<void> {
   if (!isTauriRuntime()) return;
   await invokeVoid("frontend_ready");
-}
-
-export async function waitForBackend(timeoutMs = 12000) {
-  const deadline = Date.now() + timeoutMs;
-  let lastError = "Backend did not become ready in time.";
-
-  while (Date.now() < deadline) {
-    try {
-      const [health, config] = await Promise.all([getHealth(), getConfig()]);
-      if (health.status === "ok") {
-        return {
-          config,
-          desktopStatus: await getDesktopBackendStatus()
-        };
-      }
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : "Load failed";
-    }
-    await sleep(350);
-  }
-
-  const desktopStatus = await getDesktopBackendStatus();
-  if (desktopStatus?.error) {
-    throw new Error(desktopStatus.error);
-  }
-  throw new Error(lastError);
 }
 
 export async function loadInitialConfig(): Promise<{
@@ -324,4 +293,32 @@ export async function loadInitialConfig(): Promise<{
     config,
     desktopStatus: null
   };
+}
+
+// ---------- quick window ----------
+
+export async function quickFrontendReady(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("quick_frontend_ready");
+}
+
+// `returnFocus`: hand focus back to the app the text came from (Esc, close).
+export async function hideQuickWindow(returnFocus: boolean): Promise<void> {
+  if (!isTauriRuntime()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("hide_quick_window", { returnFocus });
+}
+
+// Every finished quick translation goes to the main window's history; `show` also opens it there.
+export async function passQuickResult(result: QuickResult, show: boolean): Promise<void> {
+  if (!isTauriRuntime()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("quick_result", { payload: JSON.stringify(result), show });
+}
+
+export function isQuickWindow(): boolean {
+  if (typeof window === "undefined") return false;
+  const label = (window as any).__TAURI_INTERNALS__?.metadata?.currentWindow?.label;
+  return label === "quick" || new URLSearchParams(window.location.search).get("view") === "quick";
 }

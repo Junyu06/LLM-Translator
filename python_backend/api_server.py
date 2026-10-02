@@ -14,11 +14,11 @@ if ROOT_DIR not in sys.path:
 try:
     from .config import ConfigStore
     from .models import AppConfig, TranslationRequest
-    from .services.translation_service import TranslationService
+    from .services.translation_service import TranslationFailed, TranslationService
 except ImportError:
     from python_backend.config import ConfigStore
     from python_backend.models import AppConfig, TranslationRequest
-    from python_backend.services.translation_service import TranslationService
+    from python_backend.services.translation_service import TranslationFailed, TranslationService
 
 
 class TranslatorAPIHandler(BaseHTTPRequestHandler):
@@ -43,15 +43,21 @@ class TranslatorAPIHandler(BaseHTTPRequestHandler):
             except (TypeError, ValueError) as exc:
                 self._write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
+            except TranslationFailed as exc:
+                self._write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc), "code": exc.code})
+                return
             self._write_json(HTTPStatus.OK, response.to_dict())
             return
-        if self.path == "/ocr":
-            self._write_json(
-                HTTPStatus.NOT_IMPLEMENTED,
-                {"error": "OCR endpoint is reserved for Phase 3 native parity work."},
-            )
-            return
         self._write_json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
+
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        # The Vite dev server runs on another port, so the browser sends a CORS preflight.
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_PUT(self) -> None:  # noqa: N802
         if self.path == "/config":

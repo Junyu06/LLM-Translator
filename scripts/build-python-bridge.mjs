@@ -6,11 +6,12 @@ import process from "node:process";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const root = join(scriptDir, "..");
-const specPath = join(root, "Translator_bridge_windows.spec");
+const isWindows = process.platform === "win32";
+const specPath = join(root, isWindows ? "Translator_bridge_windows.spec" : "Translator_bridge_macos.spec");
 const binariesDir = join(root, "src-tauri", "binaries");
 const workPath = join(root, "build", "pyinstaller-bridge");
 const bridgeDir = join(binariesDir, "translator-bridge");
-const bridgeExe = join(bridgeDir, "translator-bridge.exe");
+const bridgeExe = join(bridgeDir, isWindows ? "translator-bridge.exe" : "translator-bridge");
 const legacyBridgeExe = join(binariesDir, "translator-bridge.exe");
 
 function pyinstallerCandidates() {

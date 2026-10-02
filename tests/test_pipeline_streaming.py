@@ -3,85 +3,178 @@ from __future__ import annotations
 import unittest
 
 from backend.errors import BackendRequestError
-from core.pipeline import PipelineOptions, PipelineStreamUpdate, SplitMode, iter_pipeline, iter_streaming_pipeline, run_pipeline
-from core.prompt import PromptPreset
+from core.pipeline import PipelineOptions, estimate_tokens, iter_translation, plan_chunks, split_long_segments
+from core.splitter import Segment, split_markdown_blocks, split_paragraphs
 
 
-class StreamingPipelineTests(unittest.TestCase):
-    def test_streaming_pipeline_emits_partial_and_completed_updates(self) -> None:
-        opt = PipelineOptions(split_mode=SplitMode.PLAIN, skip_empty_segments=False)
+def prompt_for(text: str) -> str:
+    return f"TRANSLATE:\n{text}"
 
-        def stream_generate(prompt: str):
-            self.assertIn("你好", prompt)
-            yield "译文：Hel"
-            yield "lo"
 
-        updates = list(iter_streaming_pipeline("你好", stream_generate, opt=opt))
+class FakeModel:
+    """Answers each request from a script and records the messages it got."""
 
-        self.assertIsInstance(updates[0], PipelineStreamUpdate)
-        self.assertEqual([update.segment_status for update in updates], ["streaming", "streaming", "completed"])
-        self.assertEqual(updates[-1].pairs[0].target, "Hello")
+    def __init__(self, *replies):
+        self.replies = list(replies)
+        self.requests = []
 
-    def test_streaming_pipeline_passthroughs_markdown_protected_blocks(self) -> None:
-        opt = PipelineOptions(
-            split_mode=SplitMode.MARKDOWN,
-            prompt_opt=PipelineOptions().prompt_opt,
-            skip_empty_segments=False,
-        )
-        opt.prompt_opt.preset = PromptPreset.MARKDOWN
+    def __call__(self, messages):
+        self.requests.append(messages)
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        # Stream in small pieces like Ollama does.
+        for start in range(0, len(reply), 3):
+            yield reply[start:start + 3]
 
-        updates = list(
-            iter_streaming_pipeline(
-                "```python\nprint('keep')\n```",
-                lambda prompt: iter(["should not be called"]),
-                opt=opt,
-            )
-        )
 
-        self.assertEqual(len(updates), 1)
-        self.assertEqual(updates[0].segment_status, "passthrough")
-        self.assertEqual(updates[0].pairs[0].target, "```python\nprint('keep')\n```")
+def final(progresses):
+    return progresses[-1]
 
-    def test_streaming_pipeline_yields_error_update_then_reraises(self) -> None:
-        opt = PipelineOptions(split_mode=SplitMode.PLAIN, skip_empty_segments=False)
 
-        def stream_generate(prompt: str):
-            raise BackendRequestError("bad json", code="invalid_backend_json")
-            yield ""
+class ChunkPlanTests(unittest.TestCase):
+    def test_consecutive_paragraphs_share_a_chunk_and_blank_lines_do_not_split_it(self):
+        segments = split_paragraphs("One.\nTwo.\n\nThree.")
+        self.assertEqual(plan_chunks(segments, PipelineOptions()), [[0, 1, 3]])
 
-        stream = iter_streaming_pipeline("hello", stream_generate, opt=opt)
-        updates = []
+    def test_code_block_ends_a_chunk(self):
+        segments = split_markdown_blocks("Before.\n\n```\ncode\n```\n\nAfter.")
+        self.assertEqual(plan_chunks(segments, PipelineOptions(markdown=True)), [[0], [2]])
 
+    def test_token_budget_starts_a_new_chunk(self):
+        segments = [Segment("word " * 100) for _ in range(5)]
+        chunks = plan_chunks(segments, PipelineOptions(chunk_tokens=300))
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual(sum(len(c) for c in chunks), 5)
+
+
+class LongParagraphTests(unittest.TestCase):
+    def test_long_paragraph_is_cut_at_sentence_ends(self):
+        text = " ".join(f"Sentence number {i} explains one more detail of the system." for i in range(200))
+        parts = split_long_segments([Segment(text)], max_tokens=300)
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(estimate_tokens(p.text) <= 300 for p in parts))
+        self.assertEqual(" ".join(p.text for p in parts), text)
+
+    def test_long_chinese_paragraph_is_cut_after_full_stops(self):
+        text = "".join(f"这是第{i}句话，用来测试很长的中文段落。" for i in range(300))
+        parts = split_long_segments([Segment(text)], max_tokens=300)
+        self.assertGreater(len(parts), 1)
+        self.assertEqual("".join(p.text for p in parts), text)
+        self.assertTrue(all(p.text.endswith("。") for p in parts))
+
+    def test_sentence_without_breaks_is_cut_anyway(self):
+        text = "长" * 6400
+        parts = split_long_segments([Segment(text)], max_tokens=300)
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(estimate_tokens(p.text) <= 300 for p in parts))
+        self.assertEqual("".join(p.text for p in parts), text)
+
+    def test_cuts_never_split_a_markdown_link(self):
+        link = "[docs](https://example.com/" + "a" * 40 + ")"
+        text = ("长" * 250 + link) * 6
+        parts = split_long_segments([Segment(text)], max_tokens=300)
+        self.assertGreater(len(parts), 1)
+        self.assertEqual(sum(p.text.count(link) for p in parts), 6)
+
+    def test_long_list_is_split_between_items(self):
+        items = [f"- 第{i}条：" + "这是一条很长的列表说明。" * 30 for i in range(20)]
+        parts = split_long_segments([Segment("\n".join(items), kind="list")], max_tokens=300)
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(p.kind == "list" and p.text.startswith("- 第") for p in parts))
+        self.assertEqual("\n".join(p.text for p in parts), "\n".join(items))
+
+    def test_long_nested_list_keeps_sub_items_under_their_parent(self):
+        lines = []
+        for top in range(2):
+            lines.append(f"- 顶层{top}")
+            lines.extend(f"  - 子项{top}-{i}：" + "说明文字。" * 40 for i in range(10))
+        text = "\n".join(lines)
+        parts = split_long_segments([Segment(text, kind="list")], max_tokens=600)
+        self.assertEqual("\n".join(p.text for p in parts), text)
+        self.assertTrue(all(p.text.startswith("- 顶层") for p in parts))
+
+    def test_short_paragraphs_and_code_are_left_alone(self):
+        segments = [Segment("Short."), Segment("x = 1\n" * 2000, protected=True, kind="fenced_code")]
+        self.assertEqual(split_long_segments(segments, max_tokens=300), segments)
+
+
+class IterTranslationTests(unittest.TestCase):
+    def test_one_request_for_a_chunk_split_back_into_paragraphs(self):
+        model = FakeModel("你好。\n\n世界。")
+        progresses = list(iter_translation(split_paragraphs("Hello.\nWorld."), model, prompt_for))
+
+        self.assertEqual(len(model.requests), 1)
+        self.assertEqual(model.requests[0][-1]["content"], "TRANSLATE:\nHello.\n\nWorld.")
+        self.assertEqual(final(progresses).targets, ["你好。", "世界。"])
+        self.assertTrue(final(progresses).finished)
+        self.assertEqual(final(progresses).completed, 2)
+
+    def test_partial_updates_fill_paragraphs_in_order(self):
+        model = FakeModel("你好。\n\n世界。")
+        progresses = list(iter_translation(split_paragraphs("Hello.\nWorld."), model, prompt_for))
+        self.assertTrue(any(p.targets[0] and not p.targets[1] for p in progresses))
+
+    def test_mismatched_paragraph_count_falls_back_to_one_request_per_paragraph(self):
+        model = FakeModel("你好，世界。", "你好。", "世界。")
+        progresses = list(iter_translation(split_paragraphs("Hello.\nWorld."), model, prompt_for))
+
+        self.assertEqual(len(model.requests), 3)
+        self.assertEqual(model.requests[1][-1]["content"], "TRANSLATE:\nHello.")
+        self.assertEqual(final(progresses).targets, ["你好。", "世界。"])
+
+    def test_fallback_requests_carry_the_previous_paragraph(self):
+        model = FakeModel("合并了", "你好。", "世界。")
+        list(iter_translation(split_paragraphs("Hello.\nWorld."), model, prompt_for))
+        second = model.requests[2]
+        self.assertEqual([m["role"] for m in second], ["user", "assistant", "user"])
+        self.assertEqual(second[1]["content"], "你好。")
+
+    def test_next_chunk_gets_the_previous_chunk_as_an_earlier_turn(self):
+        opt = PipelineOptions(chunk_tokens=40)
+        segments = split_paragraphs("\n".join(f"Paragraph number {i} talks about Holloway." for i in range(6)))
+        chunks = plan_chunks(segments, opt)
+        model = FakeModel(*["\n\n".join(f"第{i}段" for i in chunk) for chunk in chunks])
+
+        list(iter_translation(segments, model, prompt_for, opt))
+
+        self.assertGreater(len(model.requests), 1)
+        second = model.requests[1]
+        self.assertEqual([m["role"] for m in second], ["user", "assistant", "user"])
+        self.assertIn("第", second[1]["content"])
+
+    def test_code_blocks_pass_through_untouched(self):
+        model = FakeModel("之前。", "之后。")
+        segments = split_markdown_blocks("Before.\n\n```python\nprint('keep')\n```\n\nAfter.")
+        progresses = list(iter_translation(segments, model, prompt_for, PipelineOptions(markdown=True)))
+        self.assertEqual(final(progresses).targets, ["之前。", "```python\nprint('keep')\n```", "之后。"])
+        self.assertTrue(all("print" not in m[-1]["content"] for m in model.requests))
+
+    def test_markdown_list_items_stay_in_one_block(self):
+        model = FakeModel("# 安装\n\n- 下载\n- 拖进应用程序")
+        segments = split_markdown_blocks("# Install\n\n- Download\n- Drag into Applications")
+        progresses = list(iter_translation(segments, model, prompt_for, PipelineOptions(markdown=True)))
+        self.assertEqual(final(progresses).targets, ["# 安装", "- 下载\n- 拖进应用程序"])
+
+    def test_think_block_is_not_shown_or_kept(self):
+        model = FakeModel("<think>\n\n</think>\n\n你好。")
+        progresses = list(iter_translation(split_paragraphs("Hello."), model, prompt_for))
+        self.assertTrue(all("<think>" not in t for p in progresses for t in p.targets))
+        self.assertEqual(final(progresses).targets, ["你好。"])
+
+    def test_backend_error_propagates_after_partial_progress(self):
+        model = FakeModel("你好。\n\n世界。", BackendRequestError("down", code="backend_stream_error"))
+        segments = [
+            Segment("Hello."),
+            Segment("World."),
+            Segment("```\ncode\n```", protected=True, kind="fenced_code"),
+            Segment("Again."),
+        ]
+        progresses = []
         with self.assertRaises(BackendRequestError):
-            while True:
-                updates.append(next(stream))
-
-        self.assertEqual(updates[-1].segment_status, "error")
-        self.assertEqual(updates[-1].error.code, "invalid_backend_json")
-
-    def test_run_pipeline_passthroughs_markdown_protected_blocks(self) -> None:
-        opt = PipelineOptions(split_mode=SplitMode.MARKDOWN, skip_empty_segments=False)
-
-        pairs = run_pipeline(
-            "```python\nprint('keep')\n```",
-            generate=lambda prompt: "translated code",
-            opt=opt,
-        )
-
-        self.assertEqual(pairs[0].target, "```python\nprint('keep')\n```")
-
-    def test_iter_pipeline_passthroughs_markdown_protected_blocks(self) -> None:
-        opt = PipelineOptions(split_mode=SplitMode.MARKDOWN, skip_empty_segments=False)
-
-        pairs = list(
-            iter_pipeline(
-                "```python\nprint('keep')\n```",
-                generate=lambda prompt: "translated code",
-                opt=opt,
-            )
-        )
-
-        self.assertEqual(pairs[0].target, "```python\nprint('keep')\n```")
+            for progress in iter_translation(segments, model, prompt_for):
+                progresses.append(progress)
+        self.assertEqual(progresses[-1].targets[:2], ["你好。", "世界。"])
 
 
 if __name__ == "__main__":

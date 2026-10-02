@@ -9,18 +9,22 @@
     "build:frontend": "tsc && vite build",
     "build:bridge": "npm run build:bridge:windows",
     "build:bridge:windows": "node scripts/build-python-bridge.mjs",
+    "build:bridge:macos": "node scripts/build-python-bridge.mjs",
     "preview": "vite preview",
     "tauri:preflight": "node scripts/check-tauri-env.mjs",
     "tauri:dev": "npm run tauri:preflight && tauri dev",
     "tauri:build": "npm run tauri:preflight && tauri build",
     "tauri:build:windows": "npm run tauri:preflight && npm run build:bridge:windows && tauri build --config src-tauri/tauri.windows-bridge.conf.json",
-    "build:windows": "npm run tauri:build:windows"
+    "build:windows": "npm run tauri:build:windows",
+    "tauri:build:macos": "npm run tauri:preflight && tauri build --bundles app --config src-tauri/tauri.macos-bridge.conf.json",
+    "build:macos": "npm run build:bridge:macos && npm run tauri:build:macos"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-markdown": "^10.1.0"
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",

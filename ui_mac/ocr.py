@@ -43,11 +43,11 @@ except Exception:  # noqa: BLE001 - optional dependency
     VNRequestTextRecognitionLevelAccurate = None
 
 
-def get_paste_image_paths(root=None) -> List[str]:
+def get_paste_image_paths(root=None, pasteboard=None) -> List[str]:
     paths: List[str] = []
     if NSPasteboard is not None:
+        pb = pasteboard or NSPasteboard.generalPasteboard()
         try:
-            pb = NSPasteboard.generalPasteboard()
             items = pb.propertyListForType_(NSFilenamesPboardType)
             if items:
                 paths.extend([p for p in items if _is_image_file(p)])
@@ -55,7 +55,6 @@ def get_paste_image_paths(root=None) -> List[str]:
             pass
 
         try:
-            pb = NSPasteboard.generalPasteboard()
             url_str = pb.stringForType_(NSPasteboardTypeFileURL)
             if url_str:
                 parsed = urlparse(url_str)
@@ -78,13 +77,13 @@ def get_paste_image_paths(root=None) -> List[str]:
     return paths
 
 
-def get_paste_images(debug: bool = False) -> List[bytes]:
+def get_paste_images(debug: bool = False, pasteboard=None) -> List[bytes]:
     if NSPasteboard is None:
         if debug:
             print("OCR: NSPasteboard unavailable")
         return []
 
-    pb = NSPasteboard.generalPasteboard()
+    pb = pasteboard or NSPasteboard.generalPasteboard()
     types = list(pb.types() or [])
     if debug:
         print(f"OCR: pasteboard types = {types}")
@@ -210,10 +209,15 @@ def _recognize_text(cg_image) -> str:
     request = VNRecognizeTextRequest.alloc().init()
     request.setRecognitionLevel_(VNRequestTextRecognitionLevelAccurate)
     try:
-        request.setRecognitionLanguages_(
-            ["zh-Hans", "zh-Hant", "ja-JP", "ko-KR", "en-US"]
-        )
         request.setUsesLanguageCorrection_(True)
+        if request.respondsToSelector_("setAutomaticallyDetectsLanguage:"):
+            # A fixed list misreads whichever script is not first: with Chinese
+            # first, "I'll" came back as "T'll" and "command" as "commana".
+            request.setAutomaticallyDetectsLanguage_(True)
+        else:
+            request.setRecognitionLanguages_(
+                ["zh-Hans", "zh-Hant", "ja-JP", "ko-KR", "en-US"]
+            )
     except Exception:
         pass
     handler = VNImageRequestHandler.alloc().initWithCGImage_options_(cg_image, None)

@@ -10,3 +10,6 @@ __pycache__/
 *.py[cod]
 /src-tauri/target
 /src-tauri/binaries/
+
+# Machine-specific agent notes
+AGENTS.local.md
